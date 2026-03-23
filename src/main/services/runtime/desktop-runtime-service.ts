@@ -4,25 +4,33 @@ import { AppController } from "../../../runtime/app-controller";
 import type { RuntimeSnapshot } from "../../../types";
 
 export class DesktopRuntimeService extends EventEmitter {
-  readonly #controller = new AppController(parseCliArgs(process.argv.slice(1)), []);
+  #controller?: AppController;
   #started = false;
   #initializationComplete = false;
 
   constructor() {
     super();
-    this.#controller.subscribe((snapshot) => {
-      this.emit("snapshot", snapshot);
-    });
+  }
+
+  #getController(): AppController {
+    if (!this.#controller) {
+      this.#controller = new AppController(parseCliArgs(process.argv.slice(1)), []);
+      this.#controller.subscribe((snapshot) => {
+        this.emit("snapshot", snapshot);
+      });
+    }
+    return this.#controller;
   }
 
   getSnapshot(): RuntimeSnapshot {
-    return this.#controller.snapshot;
+    return this.#getController().snapshot;
   }
 
   subscribe(listener: (snapshot: RuntimeSnapshot) => void): () => void {
+    const controller = this.#getController();
     const wrapped = (snapshot: RuntimeSnapshot) => listener(snapshot);
     this.on("snapshot", wrapped);
-    listener(this.#controller.snapshot);
+    listener(controller.snapshot);
     return () => this.off("snapshot", wrapped);
   }
 
@@ -36,15 +44,15 @@ export class DesktopRuntimeService extends EventEmitter {
   }
 
   requestStart(): void {
-    this.#controller.requestStart();
+    this.#getController().requestStart();
   }
 
   async retryFailedItems(): Promise<void> {
-    await this.#controller.retryFailedItems();
+    await this.#getController().retryFailedItems();
   }
 
   async shutdown(): Promise<void> {
-    await this.#controller.shutdown();
+    await this.#getController().shutdown();
   }
 
   async openPath(target: string): Promise<void> {
@@ -54,10 +62,11 @@ export class DesktopRuntimeService extends EventEmitter {
 
   async run(): Promise<void> {
     try {
-      await this.#controller.initialize();
+      const controller = this.#getController();
+      await controller.initialize();
       this.#initializationComplete = true;
-      await this.#controller.waitForStartSignal();
-      await this.#controller.execute();
+      await controller.waitForStartSignal();
+      await controller.execute();
     } catch {
       return;
     }
