@@ -1,7 +1,6 @@
 # Document Bridge Desktop
 
 Windows-only Electron app for browser-based document transfer workflows using Playwright and a desktop control panel.
-
 The automation engine stays in Node, while the UI is rendered in Electron with a preload bridge and a React renderer.
 
 ## Commands
