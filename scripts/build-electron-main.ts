@@ -19,7 +19,7 @@ const options: BuildOptions = {
   target: "node22",
   sourcemap: true,
   legalComments: "none" as const,
-  external: ["electron", "electron-updater", "playwright", "exceljs", "semver", "zod"],
+  external: ["electron", "electron-updater", "playwright", "playwright-core", "exceljs", "semver", "zod"],
 };
 
 if (watchMode) {
