@@ -116,7 +116,7 @@ jobs:
             const names = (release.assets ?? []).map((asset) => asset.name);
             const expected = [
               "latest.yml",
-              "Document Bridge Setup",
+              "Document-Bridge-Setup",
             ];
 
             const missing = expected.filter((pattern) => !names.some((name) => name.includes(pattern)));
