@@ -5,7 +5,7 @@
   "description": "Desktop Windows app for browser-based document transfer workflows.",
   "repository": {
     "type": "git",
-    "url": "https://github.com/document-bridge/document-bridge-desktop.git"
+    "url": "https://github.com/JPSAUD501/document-bridge-desktop.git"
   },
   "type": "module",
   "main": "dist-electron/main/index.cjs",
@@ -44,7 +44,7 @@
     "publish": [
       {
         "provider": "github",
-        "owner": "document-bridge",
+        "owner": "JPSAUD501",
         "repo": "document-bridge-desktop"
       }
     ],
