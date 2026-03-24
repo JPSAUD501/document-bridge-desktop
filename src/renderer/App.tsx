@@ -67,7 +67,7 @@ const emptySnapshot: RuntimeSnapshot = {
 export function App(): ReactElement {
   const [snapshot, setSnapshot] = useState<RuntimeSnapshot>(emptySnapshot);
   const [updateState, setUpdateState] = useState<UpdateState>(defaultUpdateState);
-  const [busyAction, setBusyAction] = useState<"start" | "retry" | "folder" | null>(null);
+  const [busyAction, setBusyAction] = useState<"start" | "retry" | "folder" | "update" | null>(null);
 
   useEffect(() => {
     let mounted = true;
@@ -107,9 +107,19 @@ export function App(): ReactElement {
     try { await window.erpMidas.openPath(snapshot.runDir); } finally { setBusyAction(null); }
   };
 
+  const installUpdate = async () => {
+    setBusyAction("update");
+    try { await window.erpMidas.installUpdate(); } finally { setBusyAction(null); }
+  };
+
   return (
     <div className="app-shell">
-      <AppHeader snapshot={snapshot} updateState={updateState} />
+      <AppHeader
+        snapshot={snapshot}
+        updateState={updateState}
+        updateBusy={busyAction === "update"}
+        onInstallUpdate={() => void installUpdate()}
+      />
       <main className="app-content">
         <ActionBar
           snapshot={snapshot}
@@ -139,11 +149,16 @@ export function App(): ReactElement {
 function AppHeader({
   snapshot,
   updateState,
+  updateBusy,
+  onInstallUpdate,
 }: {
   snapshot: RuntimeSnapshot;
   updateState: UpdateState;
+  updateBusy: boolean;
+  onInstallUpdate: () => void;
 }): ReactElement {
   const updateLabel = buildUpdateLabel(updateState);
+  const canInstallUpdate = updateState.status === "downloaded" && Boolean(updateState.pendingInstallVersion);
 
   return (
     <header className="header">
@@ -168,6 +183,16 @@ function AppHeader({
           label="Updater"
           value={updateLabel}
         />
+        {canInstallUpdate && (
+          <button className="btn btn--primary" onClick={onInstallUpdate} disabled={updateBusy}>
+            {updateBusy ? (
+              <Loader2 size={15} className="btn__icon btn__icon--spin" />
+            ) : (
+              <Download size={15} className="btn__icon" />
+            )}
+            {updateBusy ? "Atualizando..." : "Atualizar"}
+          </button>
+        )}
       </div>
     </header>
   );
@@ -227,7 +252,7 @@ function ActionBar({
   onFolder,
 }: {
   snapshot: RuntimeSnapshot;
-  busyAction: "start" | "retry" | "folder" | null;
+  busyAction: "start" | "retry" | "folder" | "update" | null;
   onStart: () => void;
   onRetry: () => void;
   onFolder: () => void;

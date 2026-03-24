@@ -19,10 +19,6 @@ async function bootstrap(): Promise<void> {
   const updateService = new UpdateService(pendingStore);
   await updateService.initialize();
 
-  if (await updateService.installPendingUpdateIfPresent()) {
-    return;
-  }
-
   const runtime = new DesktopRuntimeService();
   mainWindow = createMainWindow();
   disposeIpc = registerIpc({

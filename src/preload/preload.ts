@@ -26,6 +26,9 @@ const desktopApi: DesktopApi = {
     await ipcRenderer.invoke(ipcChannels.runtime.openPath, target);
   },
   getUpdateState: async () => ipcRenderer.invoke(ipcChannels.updates.getState),
+  installUpdate: async () => {
+    await ipcRenderer.invoke(ipcChannels.updates.installNow);
+  },
   subscribeUpdateState: (listener) => {
     const handler = (_event: unknown, state: Awaited<ReturnType<DesktopApi["getUpdateState"]>>) => {
       listener(state);

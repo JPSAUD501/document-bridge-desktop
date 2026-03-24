@@ -31,6 +31,7 @@ export interface DesktopApi {
   openPath: (target: string) => Promise<void>;
   getUpdateState: () => Promise<UpdateState>;
   subscribeUpdateState: (listener: (state: UpdateState) => void) => () => void;
+  installUpdate: () => Promise<void>;
 }
 
 export const ipcChannels = {
@@ -45,5 +46,6 @@ export const ipcChannels = {
   updates: {
     getState: "updates:getState",
     stateChanged: "updates:stateChanged",
+    installNow: "updates:installNow",
   },
 } as const;

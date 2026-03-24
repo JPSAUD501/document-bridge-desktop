@@ -45,8 +45,9 @@ export class UpdateService extends EventEmitter {
     this.setState({
       enabled: true,
       channel: "latest",
-      status: this.isPackaged ? "idle" : "unsupported",
+      status: !this.isPackaged ? "unsupported" : refreshedPending ? "downloaded" : "idle",
       pendingInstallVersion: refreshedPending?.version ?? null,
+      availableVersion: refreshedPending?.version ?? null,
       currentVersion: this.appVersion,
     });
 
@@ -92,9 +93,9 @@ export class UpdateService extends EventEmitter {
     return this.#state;
   }
 
-  async installPendingUpdateIfPresent(): Promise<boolean> {
+  async installDownloadedUpdate(): Promise<void> {
     if (!this.isPackaged) {
-      return false;
+      return;
     }
 
     if (!this.#initialized) {
@@ -102,11 +103,20 @@ export class UpdateService extends EventEmitter {
     }
 
     const pending = await this.pendingStore.read();
-    if (!pending || isVersionFulfilled(pending.version, this.appVersion)) {
+    if (!pending) {
+      return;
+    }
+
+    if (isVersionFulfilled(pending.version, this.appVersion)) {
       if (pending) {
         await this.pendingStore.clear();
       }
-      return false;
+      this.setState({
+        status: "idle",
+        pendingInstallVersion: null,
+        availableVersion: null,
+      });
+      return;
     }
 
     this.setState({
@@ -117,8 +127,6 @@ export class UpdateService extends EventEmitter {
     setTimeout(() => {
       this.updater.quitAndInstall(true, true);
     }, 120);
-
-    return true;
   }
 
   private bindUpdaterEvents(): void {

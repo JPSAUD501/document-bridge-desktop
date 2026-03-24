@@ -59,7 +59,7 @@ describe("UpdateService", () => {
     expect((await store.read())?.version).toBe("1.1.0");
   });
 
-  test("installs downloaded update only on the next startup", async () => {
+  test("keeps a downloaded update pending until the user asks to install", async () => {
     vi.useFakeTimers();
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "erp-midas-install-"));
     const store = new PendingUpdateStore(path.join(tempDir, "pending.json"));
@@ -68,7 +68,11 @@ describe("UpdateService", () => {
     const service = new UpdateService(store, updater as unknown as AppUpdater, true, "1.0.0");
 
     await service.initialize();
-    await expect(service.installPendingUpdateIfPresent()).resolves.toBe(true);
+    expect(service.getState().status).toBe("downloaded");
+    expect(service.getState().pendingInstallVersion).toBe("1.1.0");
+    expect(updater.quitAndInstall).not.toHaveBeenCalled();
+
+    await expect(service.installDownloadedUpdate()).resolves.toBeUndefined();
 
     await vi.runAllTimersAsync();
     expect(updater.quitAndInstall).toHaveBeenCalledWith(true, true);

@@ -24,6 +24,7 @@ export function registerIpc({
   ipcMain.handle(ipcChannels.runtime.shutdownRun, async () => runtime.shutdown());
   ipcMain.handle(ipcChannels.runtime.openPath, async (_event, target: string) => runtime.openPath(target));
   ipcMain.handle(ipcChannels.updates.getState, async () => updates.getState());
+  ipcMain.handle(ipcChannels.updates.installNow, async () => updates.installDownloadedUpdate());
 
   const unsubscribeRuntime = runtime.subscribe((snapshot) => {
     window.webContents.send(ipcChannels.runtime.snapshotChanged, snapshot);
@@ -45,5 +46,6 @@ export function registerIpc({
     ipcMain.removeHandler(ipcChannels.runtime.shutdownRun);
     ipcMain.removeHandler(ipcChannels.runtime.openPath);
     ipcMain.removeHandler(ipcChannels.updates.getState);
+    ipcMain.removeHandler(ipcChannels.updates.installNow);
   };
 }
