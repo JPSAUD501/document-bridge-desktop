@@ -301,32 +301,58 @@ async function resolveChromiumExecutable(
     return preferredBrowserPath;
   }
 
+  const playwrightBrowserPath = await resolvePlaywrightChromium(onStatus);
+  if (playwrightBrowserPath) {
+    return playwrightBrowserPath;
+  }
+
   const localBrowserPath = await findInstalledChromiumBrowser();
   if (localBrowserPath) {
-    await onStatus?.(`Usando o navegador instalado localmente: ${localBrowserPath}.`);
+    await onStatus?.(`Usando o navegador instalado localmente como fallback: ${localBrowserPath}.`);
     return localBrowserPath;
+  }
+
+  throw new Error(
+    "Nenhum navegador Chromium compativel foi encontrado. Defina ERP_MIDAS_BROWSER_PATH ou reinstale o Playwright.",
+  );
+}
+
+async function resolvePlaywrightChromium(
+  onStatus?: (message: string) => Promise<void>,
+): Promise<string | undefined> {
+  const managedPath = safeChromiumExecutablePath();
+  if (managedPath && (await fileExists(managedPath))) {
+    await onStatus?.(`Usando o Chromium gerenciado pelo Playwright: ${managedPath}.`);
+    return managedPath;
   }
 
   const chromiumExecutable = registry.findExecutable("chromium");
   const existingPath = chromiumExecutable.executablePath("javascript");
   if (existingPath && (await fileExists(existingPath))) {
-    await onStatus?.(`Usando o Chrome for Testing ja instalado: ${existingPath}.`);
+    await onStatus?.(`Usando o Chromium do registro interno do Playwright: ${existingPath}.`);
     return existingPath;
   }
 
-  await onStatus?.("Chrome for Testing do Playwright nao encontrado. Instalando automaticamente.");
-  const executables = registry.resolveBrowsers(["chrome-for-testing"], { shell: "all" });
+  await onStatus?.("Chromium do Playwright nao encontrado. Instalando automaticamente.");
+  const executables = registry.resolveBrowsers(["chromium"], { shell: "all" });
   await registry.install(executables, {});
   const installedPath =
     chromiumExecutable.executablePath("javascript") ??
     chromiumExecutable.executablePathOrDie("javascript");
   if (await fileExists(installedPath)) {
+    await onStatus?.(`Usando o Chromium instalado automaticamente pelo Playwright: ${installedPath}.`);
     return installedPath;
   }
 
-  throw new Error(
-    "O Playwright informou que instalou o Chrome for Testing, mas o executavel nao foi encontrado depois.",
-  );
+  return undefined;
+}
+
+function safeChromiumExecutablePath(): string | undefined {
+  try {
+    return chromium.executablePath();
+  } catch {
+    return undefined;
+  }
 }
 
 async function findInstalledChromiumBrowser(): Promise<string | undefined> {
