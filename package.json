@@ -1,7 +1,7 @@
 {
   "name": "document-bridge-desktop",
   "private": true,
-  "version": "1.0.12",
+  "version": "1.0.13",
   "description": "Desktop Windows app for browser-based document transfer workflows.",
   "repository": {
     "type": "git",
