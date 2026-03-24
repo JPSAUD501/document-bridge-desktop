@@ -8,6 +8,7 @@ import { ExcelStatusWriter } from "./excel-status-writer";
 import { BrowserManager } from "./browser-manager";
 import { ErpCollector } from "./erp-collector";
 import { MidasUploader } from "./midas-uploader";
+import { validateAutomationTargets } from "../config";
 
 const MAX_RECENT_LOGS = 15;
 
@@ -91,6 +92,7 @@ export class AppController extends EventEmitter {
       });
 
       await this.refreshSnapshot();
+      validateAutomationTargets();
       await this.#logger.info("system", "Abrindo o navegador.");
       this.#browserManager = new BrowserManager({
         authStatePath: this.#runPaths.authStatePath,

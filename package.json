@@ -62,6 +62,7 @@
     }
   },
   "dependencies": {
+    "dotenv": "^16.6.1",
     "electron-updater": "^6.8.3",
     "exceljs": "^4.4.0",
     "lucide-react": "^1.0.1",

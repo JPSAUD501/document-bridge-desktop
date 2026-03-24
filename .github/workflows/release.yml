@@ -65,6 +65,9 @@ jobs:
   publish:
     runs-on: windows-latest
     needs: prepare-release
+    env:
+      ERP_URL: ${{ secrets.ERP_URL }}
+      MIDAS_URL: ${{ secrets.MIDAS_URL }}
 
     steps:
       - name: Checkout

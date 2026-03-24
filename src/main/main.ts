@@ -1,3 +1,4 @@
+import "dotenv/config";
 import path from "node:path";
 import { app, BrowserWindow, ipcMain } from "electron";
 import { registerIpc } from "./bootstrap/register-ipc";

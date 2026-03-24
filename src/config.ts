@@ -6,6 +6,17 @@ export const MIDAS_URL =
   process.env.MIDAS_URL ??
   "https://destination.example.com/internal/upload-document/new";
 
+export function validateAutomationTargets(): void {
+  const errors = [
+    validateTargetUrl("ERP_URL", ERP_URL),
+    validateTargetUrl("MIDAS_URL", MIDAS_URL),
+  ].filter((value): value is string => Boolean(value));
+
+  if (errors.length > 0) {
+    throw new Error(errors.join(" "));
+  }
+}
+
 export const APP_TIMEOUTS = {
   short: 1_500,
   medium: 5_000,
@@ -33,3 +44,23 @@ export const MIDAS_SELECTORS = {
   alertContainers:
     "[role='alert'], .mat-mdc-snack-bar-container, .mat-snack-bar-container, simple-snack-bar, .toast, .toast-message",
 };
+
+function validateTargetUrl(envName: "ERP_URL" | "MIDAS_URL", rawUrl: string): string | undefined {
+  let parsed: URL;
+
+  try {
+    parsed = new URL(rawUrl);
+  } catch {
+    return `${envName} nao e uma URL valida: ${rawUrl}`;
+  }
+
+  if (parsed.hostname.endsWith(".example.com") || parsed.hostname === "example.com") {
+    return `${envName} ainda aponta para o placeholder ${rawUrl}. Configure a variavel de ambiente com o endereco real antes de iniciar o app.`;
+  }
+
+  if (parsed.protocol !== "https:" && parsed.protocol !== "http:") {
+    return `${envName} deve usar http ou https: ${rawUrl}`;
+  }
+
+  return undefined;
+}
