@@ -23,7 +23,7 @@ export const APP_TIMEOUTS = {
   long: 15_000,
   orderOpen: 30_000,
   download: 45_000,
-  upload: 20_000,
+  upload: 180_000,
   keyboardSettle: 350,
   gridSettle: 500,
   excelRetryBase: 400,

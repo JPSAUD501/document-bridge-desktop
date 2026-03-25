@@ -5,6 +5,8 @@ import type { BrowserManager } from "./browser-manager";
 import type { ManifestStore } from "./manifest-store";
 import type { RunLogger } from "./logger";
 
+const MIDAS_BATCH_SIZE = 15;
+
 interface MidasUploaderOptions {
   browserManager: BrowserManager;
   manifestStore: ManifestStore;
@@ -38,7 +40,7 @@ export class MidasUploader {
         item.downloadPath &&
         item.uploadStatus !== "uploaded",
     );
-    const batches = chunk(pending, 50);
+    const batches = chunk(pending, MIDAS_BATCH_SIZE);
     await this.#logger.info("midas", "Preparando a fila de envio.", {
       pending: pending.length,
       batches: batches.length,
