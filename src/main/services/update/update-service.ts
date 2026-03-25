@@ -13,6 +13,7 @@ const getDefaultUpdater = (): AppUpdater => electronUpdater.autoUpdater;
 export class UpdateService extends EventEmitter {
   #state: UpdateState;
   #initialized = false;
+  #installScheduled = false;
   readonly #listeners = new Set<StateListener>();
 
   constructor(
@@ -124,9 +125,7 @@ export class UpdateService extends EventEmitter {
       pendingInstallVersion: pending.version,
     });
 
-    setTimeout(() => {
-      this.updater.quitAndInstall(true, true);
-    }, 120);
+    this.scheduleInstall();
   }
 
   private bindUpdaterEvents(): void {
@@ -169,6 +168,7 @@ export class UpdateService extends EventEmitter {
         downloadProgress: null,
         lastCheckedAt: new Date().toISOString(),
       });
+      this.scheduleInstall();
     });
 
     this.updater.on("error", () => {
@@ -185,6 +185,19 @@ export class UpdateService extends EventEmitter {
     for (const listener of this.#listeners) {
       listener(this.#state);
     }
+  }
+
+  private scheduleInstall(): void {
+    if (this.#installScheduled) {
+      return;
+    }
+
+    this.#installScheduled = true;
+    this.setState({ status: "installing" });
+
+    setTimeout(() => {
+      this.updater.quitAndInstall(true, true);
+    }, 120);
   }
 }
 

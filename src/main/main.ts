@@ -19,6 +19,11 @@ async function bootstrap(): Promise<void> {
   const updateService = new UpdateService(pendingStore);
   await updateService.initialize();
 
+  if (updateService.getState().pendingInstallVersion) {
+    await updateService.installDownloadedUpdate();
+    return;
+  }
+
   const runtime = new DesktopRuntimeService();
   mainWindow = createMainWindow();
   disposeIpc = registerIpc({
