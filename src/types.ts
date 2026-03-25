@@ -66,6 +66,7 @@ export interface StatusCounts {
 
 export interface RuntimeSnapshot {
   phase: UiPhase;
+  outputRootDir: string;
   runDir: string;
   downloadsDir: string;
   waitingForStart: boolean;
@@ -85,6 +86,7 @@ export interface RuntimeSnapshot {
 
 export interface CliOptions {
   resumePath?: string;
+  outputRootPath?: string;
   help: boolean;
 }
 

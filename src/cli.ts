@@ -24,6 +24,15 @@ export function parseCliArgs(argv: string[]): CliOptions {
         options.resumePath = path.resolve(nextValue);
         index += 1;
       }
+      continue;
+    }
+
+    if (arg === "--output-root") {
+      const nextValue = argv[index + 1];
+      if (nextValue) {
+        options.outputRootPath = path.resolve(nextValue);
+        index += 1;
+      }
     }
   }
 
@@ -38,6 +47,7 @@ export function printHelp(): void {
       "Comandos:",
       "  npm run start",
       "  npm run start -- --resume <run-folder>",
+      "  npm run start -- --output-root <root-folder>",
       "",
       "Variaveis de ambiente:",
       "  ERP_URL, MIDAS_URL",

@@ -35,6 +35,7 @@ import type { LogEntry, ManifestItem, RuntimeSnapshot, UiPhase } from "../types"
 
 const emptySnapshot: RuntimeSnapshot = {
   phase: "bootstrap",
+  outputRootDir: "",
   runDir: "",
   downloadsDir: "",
   waitingForStart: true,
@@ -495,6 +496,7 @@ function OperationPanel({ snapshot }: { snapshot: RuntimeSnapshot }): ReactEleme
       <dl className="detail-grid">
         <DetailRow label="Pasta de execução" value={snapshot.runDir || "Será criada ao iniciar o fluxo."} />
         <DetailRow label="Pasta dos PDFs"    value={snapshot.downloadsDir || "Aguardando inicialização."} />
+        <DetailRow label="Pasta raiz das runs" value={snapshot.outputRootDir || "Sera escolhida ao iniciar o fluxo."} />
         <DetailRow label="Nota atual"         value={snapshot.currentItem  || "Nenhuma nota ativa no momento."} />
         <DetailRow label="Lote atual"         value={snapshot.currentBatch || "Nenhum lote em processamento."} />
       </dl>

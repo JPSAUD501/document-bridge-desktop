@@ -11,7 +11,7 @@ export async function resolveRunPaths(cliOptions: CliOptions): Promise<RunPaths>
       throw new Error(`Resume folder not found: ${runDir}`);
     }
 
-    const workspaceRoot = await findWorkspaceRoot(path.dirname(runDir));
+    const workspaceRoot = await findWorkspaceRoot();
     const downloadsDir = path.join(runDir, "downloads");
     const authStatePath = await resolveAuthStatePath(workspaceRoot);
     await fs.mkdir(downloadsDir, { recursive: true });
@@ -31,7 +31,10 @@ export async function resolveRunPaths(cliOptions: CliOptions): Promise<RunPaths>
 
   const workspaceRoot = await findWorkspaceRoot();
   const runId = formatRunId();
-  const runDir = path.join(workspaceRoot, "output", runId);
+  const outputRootPath = cliOptions.outputRootPath
+    ? path.resolve(cliOptions.outputRootPath)
+    : path.join(workspaceRoot, "output");
+  const runDir = path.join(outputRootPath, runId);
   const downloadsDir = path.join(runDir, "downloads");
   const authStatePath = await resolveAuthStatePath(workspaceRoot);
   await fs.mkdir(downloadsDir, { recursive: true });
@@ -49,7 +52,7 @@ export async function resolveRunPaths(cliOptions: CliOptions): Promise<RunPaths>
   };
 }
 
-async function resolveAuthStatePath(workspaceRoot: string): Promise<string> {
+export async function resolveAuthStatePath(workspaceRoot: string): Promise<string> {
   const preferredDir = path.join(workspaceRoot, "tmp", "erp-midas-desktop");
   const legacyPath = path.join(workspaceRoot, "tmp", "erp-midas-tui", "auth-state.json");
   const preferredPath = path.join(preferredDir, "auth-state.json");

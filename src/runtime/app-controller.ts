@@ -1,7 +1,8 @@
 import { EventEmitter } from "node:events";
+import path from "node:path";
 import type { CliOptions, RuntimeSnapshot } from "../types";
-import { buildCounts, summarizeError } from "../lib/utils";
-import { resolveRunPaths } from "./run-context";
+import { buildCounts, findWorkspaceRoot, summarizeError } from "../lib/utils";
+import { resolveAuthStatePath, resolveRunPaths } from "./run-context";
 import { RunLogger } from "./logger";
 import { ManifestStore } from "./manifest-store";
 import { ExcelStatusWriter } from "./excel-status-writer";
@@ -25,6 +26,7 @@ export class AppController extends EventEmitter {
   #executionInFlight = false;
   #snapshot: RuntimeSnapshot = {
     phase: "bootstrap",
+    outputRootDir: "",
     runDir: "",
     downloadsDir: "",
     waitingForStart: true,
@@ -59,49 +61,19 @@ export class AppController extends EventEmitter {
 
   async initialize(): Promise<void> {
     try {
-      this.#runPaths = await resolveRunPaths(this.#cliOptions);
-      this.setSnapshot({
-        phase: "preflight",
-        runDir: this.#runPaths.runDir,
-        downloadsDir: this.#runPaths.downloadsDir,
-      });
-
-      this.#logger = new RunLogger(this.#runPaths.logPath);
-      await this.#logger.initialize();
-      this.#logger.onEntry((entry) => {
-        this.#snapshot.recentLogs = [...this.#snapshot.recentLogs, entry].slice(-MAX_RECENT_LOGS);
-        this.emitSnapshot();
-      });
-
-      for (const note of this.#bootstrapNotes) {
-        await this.#logger.info("bootstrap", note);
-      }
-
-      this.#manifestStore = new ManifestStore(this.#runPaths.manifestPath, this.#runPaths.runId);
-      await this.#manifestStore.initialize();
-
-      this.#excelWriter = new ExcelStatusWriter(this.#runPaths.excelPath);
-      this.#excelWriter.onStatus((status) => {
-        this.setSnapshot({ excelStatus: status });
-      });
-      this.#excelWriter.onError((error) => {
-        void this.#logger?.warn("excel", "Falha ao atualizar o status.xlsx.", { error: error.message });
-        this.setSnapshot({
-          errors: [...this.#snapshot.errors, `Excel: ${error.message}`].slice(-10),
-        });
-      });
-
-      await this.refreshSnapshot();
       validateAutomationTargets();
-      await this.#logger.info("system", "Abrindo o navegador.");
+      const workspaceRoot = await findWorkspaceRoot();
+      const authStatePath = await resolveAuthStatePath(workspaceRoot);
+
+      this.setSnapshot({ phase: "preflight" });
       this.#browserManager = new BrowserManager({
-        authStatePath: this.#runPaths.authStatePath,
+        authStatePath,
         onStatus: async (message) => {
           await this.#logger?.info("browser", message);
         },
       });
+
       await this.#browserManager.launch();
-      await this.#logger.info("system", "Navegador pronto para login no ERP e na Midas.");
 
       this.setSnapshot({
         phase: "ready",
@@ -121,9 +93,20 @@ export class AppController extends EventEmitter {
     }
   }
 
-  requestStart(): void {
+  async requestStart(outputRootPath?: string): Promise<void> {
     if (this.#executionStarted || !this.#startResolver) {
       return;
+    }
+
+    try {
+      if (!this.#runPaths) {
+        await this.prepareRun(outputRootPath);
+      }
+    } catch (error) {
+      this.setSnapshot({
+        errors: [...this.#snapshot.errors, summarizeError(error)].slice(-10),
+      });
+      throw error;
     }
 
     this.#executionStarted = true;
@@ -302,6 +285,59 @@ export class AppController extends EventEmitter {
     }
     return this.#runPaths;
   }
+
+  async prepareRun(outputRootPath?: string): Promise<void> {
+    const runPaths = await resolveRunPaths({
+      ...this.#cliOptions,
+      outputRootPath: outputRootPath ?? this.#cliOptions.outputRootPath,
+    });
+
+    try {
+      this.setSnapshot({
+        outputRootDir: path.dirname(runPaths.runDir),
+        runDir: runPaths.runDir,
+        downloadsDir: runPaths.downloadsDir,
+      });
+
+      const logger = new RunLogger(runPaths.logPath);
+      await logger.initialize();
+      logger.onEntry((entry) => {
+        this.#snapshot.recentLogs = [...this.#snapshot.recentLogs, entry].slice(-MAX_RECENT_LOGS);
+        this.emitSnapshot();
+      });
+
+      for (const note of this.#bootstrapNotes) {
+        await logger.info("bootstrap", note);
+      }
+
+      const manifestStore = new ManifestStore(runPaths.manifestPath, runPaths.runId);
+      await manifestStore.initialize();
+
+      const excelWriter = new ExcelStatusWriter(runPaths.excelPath);
+      excelWriter.onStatus((status) => {
+        this.setSnapshot({ excelStatus: status });
+      });
+      excelWriter.onError((error) => {
+        void this.#logger?.warn("excel", "Falha ao atualizar o status.xlsx.", { error: error.message });
+        this.setSnapshot({
+          errors: [...this.#snapshot.errors, `Excel: ${error.message}`].slice(-10),
+        });
+      });
+
+      this.#runPaths = runPaths;
+      this.#logger = logger;
+      this.#manifestStore = manifestStore;
+      this.#excelWriter = excelWriter;
+
+      await this.refreshSnapshot();
+    } catch (error) {
+      this.#runPaths = undefined;
+      this.#logger = undefined;
+      this.#manifestStore = undefined;
+      this.#excelWriter = undefined;
+      throw error;
+    }
+  }
 }
 
 function deriveSnapshotState(snapshot: RuntimeSnapshot): RuntimeSnapshot {
@@ -328,19 +364,19 @@ function deriveSnapshotState(snapshot: RuntimeSnapshot): RuntimeSnapshot {
 
 function buildRunStatusMessage(snapshot: RuntimeSnapshot, canRetry: boolean): string {
   if (snapshot.phase === "bootstrap") {
-    return "Preparando os diretórios da execução e restaurando o contexto local.";
+    return "Inicializando o aplicativo e restaurando o contexto local.";
   }
 
   if (snapshot.phase === "preflight") {
-    return "Abrindo o navegador externo e preparando ERP e Midas para a automação.";
+    return "Abrindo o navegador externo e preparando ERP e Midas para a automacao.";
   }
 
   if (snapshot.phase === "ready" && snapshot.waitingForStart) {
-    return "ERP e Midas devem estar prontos. Use o botão de início quando as duas páginas estiverem posicionadas.";
+    return "ERP e Midas devem estar prontos. Ao iniciar, voce vai escolher a pasta raiz onde as runs serao salvas.";
   }
 
   if (snapshot.phase === "downloading") {
-    return "Baixando os PDFs do ERP. Mantenha o navegador aberto até o lote terminar.";
+    return "Baixando os PDFs do ERP. Mantenha o navegador aberto ate o lote terminar.";
   }
 
   if (snapshot.phase === "uploading") {
@@ -349,14 +385,14 @@ function buildRunStatusMessage(snapshot: RuntimeSnapshot, canRetry: boolean): st
 
   if (snapshot.phase === "summary") {
     return canRetry
-      ? "A execução terminou com pendências. Você pode tentar novamente apenas os itens restantes."
-      : "Execução concluída. Revise o resumo e os arquivos gerados.";
+      ? "A execucao terminou com pendencias. Voce pode tentar novamente apenas os itens restantes."
+      : "Execucao concluida. Revise o resumo e os arquivos gerados.";
   }
 
   if (snapshot.phase === "error") {
     return canRetry
-      ? "A execução parou com erro, mas há itens elegíveis para novo processamento."
-      : "A execução falhou. Revise os detalhes e reinicie o fluxo se necessário.";
+      ? "A execucao parou com erro, mas ha itens elegiveis para novo processamento."
+      : "A execucao falhou. Revise os detalhes e reinicie o fluxo se necessario.";
   }
 
   return "Acompanhe o andamento em tempo real pela interface.";

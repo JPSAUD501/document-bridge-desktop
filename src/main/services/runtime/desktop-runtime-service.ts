@@ -43,8 +43,31 @@ export class DesktopRuntimeService extends EventEmitter {
     void this.run();
   }
 
-  requestStart(): void {
-    this.#getController().requestStart();
+  async requestStart(): Promise<void> {
+    const controller = this.#getController();
+    const snapshot = controller.snapshot;
+
+    if (snapshot.outputRootDir) {
+      await controller.requestStart();
+      return;
+    }
+
+    const { BrowserWindow, dialog } = await import("electron");
+    const dialogOptions = {
+      title: "Escolha a pasta raiz das runs",
+      buttonLabel: "Usar esta pasta",
+      properties: ["openDirectory", "createDirectory"] as Array<"openDirectory" | "createDirectory">,
+    };
+    const parentWindow = BrowserWindow.getFocusedWindow();
+    const selected = parentWindow
+      ? await dialog.showOpenDialog(parentWindow, dialogOptions)
+      : await dialog.showOpenDialog(dialogOptions);
+
+    if (selected.canceled || !selected.filePaths[0]) {
+      return;
+    }
+
+    await controller.requestStart(selected.filePaths[0]);
   }
 
   async retryFailedItems(): Promise<void> {
