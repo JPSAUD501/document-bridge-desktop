@@ -73,11 +73,11 @@ export class BrowserManager {
   }
 
   async waitForErpGrid(): Promise<void> {
-    await this.erpPage.locator(ERP_SELECTORS.rowInputs).first().waitFor({ timeout: APP_TIMEOUTS.long });
+    await this.getVisibleErpRows().first().waitFor({ timeout: APP_TIMEOUTS.long });
   }
 
   async getVisiblePoNumbers(): Promise<string[]> {
-    const rows = this.erpPage.locator(ERP_SELECTORS.rowInputs);
+    const rows = this.getVisibleErpRows();
     const count = await rows.count();
     const poNumbers: string[] = [];
 
@@ -93,7 +93,7 @@ export class BrowserManager {
 
   async openErpPurchaseOrder(poNumber: string): Promise<void> {
     await this.erpPage.bringToFront().catch(() => undefined);
-    const rows = this.erpPage.locator(ERP_SELECTORS.rowInputs);
+    const rows = this.getVisibleErpRows();
     const count = await rows.count();
 
     for (let index = 0; index < count; index += 1) {
@@ -191,13 +191,34 @@ export class BrowserManager {
 
     try {
       await input.setInputFiles(filePaths);
-      await this.midasPage.getByRole("button", { name: /enviar/i }).first().click({
-        timeout: APP_TIMEOUTS.medium,
-      });
+      const uploadButton = this.midasPage.getByRole("button", { name: /enviar/i }).first();
+      await uploadButton.waitFor({ state: "visible", timeout: APP_TIMEOUTS.long });
+      await uploadButton.scrollIntoViewIfNeeded().catch(() => undefined);
+      await this.waitForMidasUploadButtonEnabled(uploadButton, filePaths.length);
+      await uploadButton.click({ timeout: APP_TIMEOUTS.upload });
       return { toastText: await this.waitForMidasSuccessToast() };
     } finally {
       await input.setInputFiles([]).catch(() => undefined);
     }
+  }
+
+  async waitForMidasUploadButtonEnabled(
+    uploadButton: ReturnType<Page["getByRole"]>,
+    fileCount: number,
+  ): Promise<void> {
+    const startedAt = Date.now();
+
+    while (Date.now() - startedAt < APP_TIMEOUTS.upload) {
+      if (await uploadButton.isEnabled().catch(() => false)) {
+        return;
+      }
+
+      await sleep(250);
+    }
+
+    throw new Error(
+      `O botao Enviar permaneceu desabilitado apos anexar ${fileCount} arquivo(s) na Midas.`,
+    );
   }
 
   async waitForMidasSuccessToast(): Promise<string> {
@@ -290,6 +311,10 @@ export class BrowserManager {
     await sleep(APP_TIMEOUTS.keyboardSettle);
     await this.erpPage.keyboard.press(key);
     await sleep(APP_TIMEOUTS.keyboardSettle);
+  }
+
+  getVisibleErpRows() {
+    return this.erpPage.locator(`${ERP_SELECTORS.rowInputs}:visible`);
   }
 }
 
