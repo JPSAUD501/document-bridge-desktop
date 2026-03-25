@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import { chromium, type Browser, type BrowserContext, type Page } from "playwright";
 import { registry } from "playwright-core/lib/server/registry/index";
 import { APP_TIMEOUTS, ERP_SELECTORS, ERP_URL, MIDAS_SELECTORS, MIDAS_URL } from "../config";
+import { normalizePdfFileName } from "../lib/utils";
 
 interface BrowserManagerOptions {
   authStatePath?: string;
@@ -156,7 +157,7 @@ export class BrowserManager {
     await openButton.click({ timeout: APP_TIMEOUTS.medium });
 
     const download = await downloadPromise;
-    const originalFileName = download.suggestedFilename();
+    const originalFileName = normalizePdfFileName(download.suggestedFilename());
     await download.saveAs(downloadPath);
     return { originalFileName };
   }

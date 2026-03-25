@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { buildCounts, buildSavedPdfName, chunk } from "../src/lib/utils";
+import { buildCounts, buildSavedPdfName, chunk, normalizePdfFileName } from "../src/lib/utils";
 
 describe("utils", () => {
   test("chunks arrays into batches of 50", () => {
@@ -15,6 +15,11 @@ describe("utils", () => {
   test("builds deterministic PDF names", () => {
     const fileName = buildSavedPdfName(3, "OC304631", "395388 RENASCER.pdf");
     expect(fileName).toBe("0003-oc304631-395388-renascer.pdf");
+  });
+
+  test("forces pdf extension when the source name comes without it", () => {
+    expect(normalizePdfFileName("395388 RENASCER")).toBe("395388 RENASCER.pdf");
+    expect(buildSavedPdfName(3, "OC304631", "395388 RENASCER")).toBe("0003-oc304631-395388-renascer.pdf");
   });
 
   test("builds status counters from manifest items", () => {

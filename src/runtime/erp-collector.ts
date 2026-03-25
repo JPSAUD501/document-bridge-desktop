@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { buildSavedPdfName, fileExists, sanitizeFileName, summarizeError } from "../lib/utils";
+import { buildSavedPdfName, fileExists, normalizePdfFileName, sanitizeFileName, summarizeError } from "../lib/utils";
 import type { BrowserManager } from "./browser-manager";
 import type { ManifestStore } from "./manifest-store";
 import type { RunLogger } from "./logger";
@@ -84,7 +84,24 @@ export class ErpCollector {
     }
 
     if (item.downloadStatus === "downloaded" && item.downloadPath && (await fileExists(item.downloadPath))) {
-      await this.#manifestStore.updateItem(itemId, { uploadStatus: "queued_for_upload" });
+      const repairedSavedFileName = normalizePdfFileName(
+        item.savedFileName ?? path.basename(item.downloadPath),
+        `${poNumber}.pdf`,
+      );
+      const repairedDownloadPath = path.join(this.#downloadsDir, repairedSavedFileName);
+
+      if (repairedDownloadPath !== item.downloadPath) {
+        await fs.rename(item.downloadPath, repairedDownloadPath);
+      }
+
+      await this.#manifestStore.updateItem(itemId, {
+        originalFileName: item.originalFileName
+          ? normalizePdfFileName(item.originalFileName, `${poNumber}.pdf`)
+          : undefined,
+        savedFileName: repairedSavedFileName,
+        downloadPath: repairedDownloadPath,
+        uploadStatus: "queued_for_upload",
+      });
       await this.#onManifestChanged();
       await this.#logger.info("erp", "PDF ja existente; reaproveitando arquivo salvo.", { poNumber });
       return;

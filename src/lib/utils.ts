@@ -36,9 +36,15 @@ export function ensureExtension(fileName: string, extension: string): string {
     : `${fileName}${extension}`;
 }
 
+export function normalizePdfFileName(fileName?: string, fallback = "document.pdf"): string {
+  const trimmed = fileName?.trim();
+  return ensureExtension(trimmed || fallback, ".pdf");
+}
+
 export function buildSavedPdfName(index: number, poNumber: string, originalName: string): string {
+  const normalizedOriginalName = normalizePdfFileName(originalName);
   const baseOriginal = sanitizeFileName(
-    path.basename(originalName, path.extname(originalName)) || "document",
+    path.basename(normalizedOriginalName, path.extname(normalizedOriginalName)) || "document",
   );
   const po = sanitizeFileName(poNumber) || "unknown-po";
   const prefix = `${index}`.padStart(4, "0");
