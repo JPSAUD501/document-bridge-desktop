@@ -43,9 +43,11 @@ export class ErpCollector {
 
     let sourceRow = this.#manifestStore.items.length;
     let stablePasses = 0;
+    let previousVisibleSignature = "";
 
     while (stablePasses < 4) {
       const visiblePoNumbers = await this.#browserManager.getVisiblePoNumbers();
+      const currentVisibleSignature = visiblePoNumbers.join("|");
       let foundNew = false;
 
       for (const poNumber of visiblePoNumbers) {
@@ -66,7 +68,11 @@ export class ErpCollector {
         await this.processPurchaseOrder(poNumber);
       }
 
-      stablePasses = foundNew ? 0 : stablePasses + 1;
+      stablePasses =
+        !foundNew && currentVisibleSignature === previousVisibleSignature
+          ? stablePasses + 1
+          : 0;
+      previousVisibleSignature = currentVisibleSignature;
       await this.#browserManager.scrollErpGrid();
     }
 

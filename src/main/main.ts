@@ -54,7 +54,8 @@ function createMainWindow(): BrowserWindow {
     height: 940,
     minWidth: 1180,
     minHeight: 780,
-    backgroundColor: "#efe7da",
+    backgroundColor: "#0d1420",
+    title: "Pegasus",
     autoHideMenuBar: true,
     show: false,
     webPreferences: {

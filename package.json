@@ -1,8 +1,8 @@
 {
-  "name": "document-bridge-desktop",
+  "name": "pegasus-desktop",
   "private": true,
   "version": "1.0.20",
-  "description": "Desktop Windows app for browser-based document transfer workflows.",
+  "description": "Pegasus — Desktop automation for ERP-to-MIDAS document workflows.",
   "repository": {
     "type": "git",
     "url": "https://github.com/JPSAUD501/document-bridge-desktop.git"
@@ -26,11 +26,13 @@
     "build": "npm run clean && npm run typecheck && npm run build:main && npm run build:preload && vite build",
     "package": "npm run build && electron-builder --win nsis",
     "release:github": "npm run build && electron-builder --publish always --win nsis",
-    "version:next": "tsx scripts/next-version.ts"
+    "version:next": "tsx scripts/next-version.ts",
+    "gen:icons": "node scripts/generate-icons.mjs"
   },
   "build": {
-    "appId": "com.example.document-bridge-desktop",
-    "productName": "Document Bridge",
+    "appId": "com.pegasus.desktop",
+    "productName": "Pegasus",
+    "icon": "resources/icon.png",
     "electronUpdaterCompatibility": ">=2.16",
     "directories": {
       "output": "release"
@@ -38,6 +40,7 @@
     "files": [
       "dist/**/*",
       "dist-electron/**/*",
+      "resources/**/*",
       "package.json"
     ],
     "asar": true,
@@ -51,6 +54,7 @@
     "generateUpdatesFilesForAllChannels": true,
     "win": {
       "signAndEditExecutable": false,
+      "icon": "resources/icon.png",
       "target": [
         "nsis"
       ]
@@ -58,7 +62,9 @@
     "nsis": {
       "oneClick": true,
       "createDesktopShortcut": true,
-      "createStartMenuShortcut": true
+      "createStartMenuShortcut": true,
+      "installerIcon": "resources/icon.png",
+      "uninstallerIcon": "resources/icon.png"
     }
   },
   "dependencies": {
@@ -74,6 +80,7 @@
     "zod": "^4.3.6"
   },
   "devDependencies": {
+    "@resvg/resvg-js": "^2.6.2",
     "@tailwindcss/vite": "^4.2.2",
     "@types/node": "^24.6.0",
     "@types/react": "^19.2.2",

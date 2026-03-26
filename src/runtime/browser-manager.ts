@@ -175,7 +175,16 @@ export class BrowserManager {
   }
 
   async scrollErpGrid(): Promise<void> {
-    await this.erpPage.mouse.wheel(0, 700);
+    await this.erpPage.bringToFront().catch(() => undefined);
+    const rows = this.getVisibleErpRows();
+    if ((await rows.count()) > 0) {
+      await rows.last().click({ timeout: APP_TIMEOUTS.medium }).catch(() => undefined);
+      await sleep(APP_TIMEOUTS.keyboardSettle);
+      await this.erpPage.keyboard.press("PageDown").catch(() => undefined);
+      await sleep(APP_TIMEOUTS.gridSettle);
+    }
+
+    await this.erpPage.mouse.wheel(0, 900);
     await sleep(APP_TIMEOUTS.gridSettle + 250);
   }
 
@@ -258,21 +267,30 @@ export class BrowserManager {
 
   async waitForMidasSuccessToast(): Promise<string> {
     const alerts = this.midasPage.locator(MIDAS_SELECTORS.alertContainers);
+    const successHeading = this.midasPage.getByText(/documentos foram enviados com sucesso/i).first();
+    const newDocumentButton = this.midasPage.getByRole("button", { name: /enviar novo documento/i }).first();
+    const startedAt = Date.now();
 
-    try {
-      await alerts.first().waitFor({ timeout: APP_TIMEOUTS.upload });
-      const text = (await alerts.first().innerText()).toLowerCase();
-      if (/(erro|falha)/i.test(text)) {
-        throw new Error(`O portal retornou erro: ${text}`);
+    while (Date.now() - startedAt < APP_TIMEOUTS.upload) {
+      if (
+        (await successHeading.isVisible().catch(() => false)) ||
+        (await newDocumentButton.isVisible().catch(() => false))
+      ) {
+        return "success-page";
       }
-      return text;
-    } catch (error) {
-      await sleep(3_000);
-      if (error instanceof Error && /O portal retornou erro/i.test(error.message)) {
-        throw error;
+
+      if (await alerts.first().isVisible().catch(() => false)) {
+        const text = (await alerts.first().innerText()).toLowerCase();
+        if (/(erro|falha)/i.test(text)) {
+          throw new Error(`O portal retornou erro: ${text}`);
+        }
+        return text;
       }
-      return "";
+
+      await sleep(250);
     }
+
+    return "";
   }
 
   async close(): Promise<void> {
