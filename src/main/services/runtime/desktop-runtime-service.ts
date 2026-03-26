@@ -44,7 +44,7 @@ export class DesktopRuntimeService extends EventEmitter {
   }
 
   async inspectErp(): Promise<void> {
-    await this.#getController().inspectErpVisibleCount();
+    await this.#getController().inspectErpVisibleCount({ silent: true });
   }
 
   async requestStart(): Promise<void> {

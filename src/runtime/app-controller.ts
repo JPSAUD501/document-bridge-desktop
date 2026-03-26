@@ -116,7 +116,7 @@ export class AppController extends EventEmitter {
     this.#startResolver();
   }
 
-  async inspectErpVisibleCount(options: { silent?: boolean } = {}): Promise<void> {
+  async inspectErpVisibleCount(options: { silent?: boolean } = { silent: true }): Promise<void> {
     if (!this.#browserManager || this.#executionStarted || this.#executionInFlight) {
       return;
     }

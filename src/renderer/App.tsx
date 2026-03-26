@@ -191,7 +191,8 @@ function PegasusLogo(): ReactElement {
 export function App(): ReactElement {
   const [snapshot, setSnapshot] = useState<RuntimeSnapshot>(emptySnapshot);
   const [updateState, setUpdateState] = useState<UpdateState>(defaultUpdateState);
-  const [busyAction, setBusyAction] = useState<"inspect" | "start" | "retry" | "folder" | "update" | null>(null);
+  const [busyAction, setBusyAction] = useState<"start" | "retry" | "folder" | "update" | null>(null);
+  const inspectInFlightRef = useRef(false);
 
   useEffect(() => {
     let mounted = true;
@@ -220,11 +221,6 @@ export function App(): ReactElement {
     try { await window.erpMidas.requestStart(); } finally { setBusyAction(null); }
   };
 
-  const inspectErp = async () => {
-    setBusyAction("inspect");
-    try { await window.erpMidas.inspectErp(); } finally { setBusyAction(null); }
-  };
-
   const retryRun = async () => {
     setBusyAction("retry");
     try { await window.erpMidas.retryFailedItems(); } finally { setBusyAction(null); }
@@ -240,6 +236,37 @@ export function App(): ReactElement {
     setBusyAction("update");
     try { await window.erpMidas.installUpdate(); } finally { setBusyAction(null); }
   };
+
+  useEffect(() => {
+    if (!snapshot.browserReady || !snapshot.waitingForStart || snapshot.phase !== "ready") {
+      return;
+    }
+
+    let cancelled = false;
+
+    const refreshPreview = async () => {
+      if (inspectInFlightRef.current || cancelled) {
+        return;
+      }
+
+      inspectInFlightRef.current = true;
+      try {
+        await window.erpMidas.inspectErp();
+      } finally {
+        inspectInFlightRef.current = false;
+      }
+    };
+
+    void refreshPreview();
+    const intervalId = window.setInterval(() => {
+      void refreshPreview();
+    }, 5_000);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(intervalId);
+    };
+  }, [snapshot.browserReady, snapshot.waitingForStart, snapshot.phase]);
 
   return (
     <div className="app-shell">
@@ -263,7 +290,6 @@ export function App(): ReactElement {
           <ActionBar
             snapshot={snapshot}
             busyAction={busyAction}
-            onInspect={() => void inspectErp()}
             onStart={() => void startRun()}
             onRetry={() => void retryRun()}
             onFolder={() => void openRunFolder()}
@@ -419,14 +445,12 @@ function StatusPill({
 function ActionBar({
   snapshot,
   busyAction,
-  onInspect,
   onStart,
   onRetry,
   onFolder,
 }: {
   snapshot: RuntimeSnapshot;
-  busyAction: "inspect" | "start" | "retry" | "folder" | "update" | null;
-  onInspect: () => void;
+  busyAction: "start" | "retry" | "folder" | "update" | null;
   onStart: () => void;
   onRetry: () => void;
   onFolder: () => void;
@@ -434,21 +458,6 @@ function ActionBar({
   return (
     <section className="action-bar">
       <div className="action-bar__buttons">
-        <motion.button
-          className="btn btn--secondary"
-          onClick={onInspect}
-          disabled={!snapshot.browserReady || !snapshot.waitingForStart || busyAction !== null}
-          whileHover={snapshot.browserReady && snapshot.waitingForStart && busyAction === null ? { scale: 1.02 } : {}}
-          whileTap={snapshot.browserReady && snapshot.waitingForStart && busyAction === null ? { scale: 0.97 } : {}}
-        >
-          {busyAction === "inspect" ? (
-            <Loader2 size={15} className="btn__icon btn__icon--spin" />
-          ) : (
-            <RefreshCw size={15} className="btn__icon" />
-          )}
-          {busyAction === "inspect" ? "Lendo ERP..." : "Atualizar previa ERP"}
-        </motion.button>
-
         <motion.button
           className="btn btn--primary"
           onClick={onStart}
