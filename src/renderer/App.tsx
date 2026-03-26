@@ -49,6 +49,7 @@ const emptySnapshot: RuntimeSnapshot = {
   canStart: false,
   canRetry: false,
   browserReady: false,
+  visibleOcCountIsPreview: true,
   isDiscoveryComplete: false,
   totalItems: 0,
   counts: {
@@ -570,7 +571,7 @@ function MetricsSection({ snapshot }: { snapshot: RuntimeSnapshot }): ReactEleme
       value: snapshot.visibleOcCount ?? 0,
       tone: "dark",
       icon: <Globe size={16} />,
-      subtitle: snapshot.visibleOcCount != null ? "Previa ERP" : "Sem leitura",
+      subtitle: snapshot.visibleOcCount != null ? "Janela visivel" : "Sem leitura",
     },
     {
       label: "Total encontrado",
@@ -712,7 +713,7 @@ function OperationPanel({ snapshot }: { snapshot: RuntimeSnapshot }): ReactEleme
       <div className="steps-guide">
         <div className="steps-guide__title">Resumo do ERP</div>
         <ol className="steps-guide__list">
-          <li>OCs visiveis agora: {snapshot.visibleOcCount ?? 0}</li>
+          <li>OCs visiveis agora: {snapshot.visibleOcCount ?? 0} {snapshot.visibleOcCountIsPreview ? "(janela atual, nao e o total filtrado)" : ""}</li>
           <li>OCs encontradas na varredura: {discoveredLabel}</li>
         </ol>
       </div>

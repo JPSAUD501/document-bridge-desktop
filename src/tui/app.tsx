@@ -152,7 +152,7 @@ function renderScreen(snapshot: RuntimeSnapshot): string {
         `Pasta dos PDFs: ${snapshot.downloadsDir ? truncateMiddle(snapshot.downloadsDir, width - 22) : "-"}`,
         `Navegador: ${snapshot.browserReady ? paint("Pronto", GREEN) : paint("Ainda abrindo", YELLOW)}`,
         `Planilha Excel: ${translateExcelStatus(snapshot.excelStatus)}`,
-        `OCs visiveis no ERP: ${snapshot.visibleOcCount ?? "-"}`,
+        `OCs visiveis no ERP: ${snapshot.visibleOcCount ?? "-"}${snapshot.visibleOcCountIsPreview ? " (janela atual)" : ""}`,
         `OCs encontradas: ${snapshot.discoveredOcCount != null ? String(snapshot.discoveredOcCount) : "-"}`,
         `Nota atual: ${snapshot.currentItem ?? "-"}`,
         `Lote atual: ${snapshot.currentBatch ?? "-"}`,
@@ -207,7 +207,7 @@ function guidanceFor(snapshot: RuntimeSnapshot): string {
 
   if (snapshot.phase === "ready" && snapshot.waitingForStart) {
     return snapshot.visibleOcCount != null
-      ? `Ambiente pronto. O ERP mostra ${snapshot.visibleOcCount} OCs visiveis. Pressione Enter para comecar a automacao.`
+      ? `Ambiente pronto. O ERP mostra ${snapshot.visibleOcCount} OCs visiveis na janela atual. Pressione Enter para comecar a automacao.`
       : "Ambiente pronto. Pressione Enter para comecar a automacao.";
   }
 

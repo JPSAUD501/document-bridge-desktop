@@ -9,6 +9,26 @@ interface BrowserManagerOptions {
   onStatus?: (message: string) => Promise<void>;
 }
 
+export interface ErpGridState {
+  visiblePoNumbers: string[];
+  visibleSignature: string;
+  scrollTop: number;
+  scrollHeight: number;
+  clientHeight: number;
+}
+
+export interface ErpGridAdvanceResult {
+  state: ErpGridState;
+  advanced: boolean;
+  reachedEnd: boolean;
+}
+
+const ERP_GRID_STABLE_SAMPLES = 3;
+const ERP_GRID_SAMPLE_INTERVAL_MS = 200;
+const ERP_GRID_SETTLE_TIMEOUT_MS = 3_000;
+const ERP_GRID_SCROLL_RETRIES = 3;
+const ERP_GRID_END_TOLERANCE_PX = 12;
+
 export class BrowserManager {
   #browser?: Browser;
   #context?: BrowserContext;
@@ -78,7 +98,12 @@ export class BrowserManager {
 
   async inspectVisiblePoNumbers(timeoutMs = APP_TIMEOUTS.medium): Promise<string[]> {
     await this.waitForErpGrid(timeoutMs);
-    return this.getVisiblePoNumbers();
+    return (await this.waitForErpGridStabilized()).visiblePoNumbers;
+  }
+
+  async getErpGridState(): Promise<ErpGridState> {
+    await this.waitForErpGrid();
+    return this.waitForErpGridStabilized();
   }
 
   async getVisiblePoNumbers(): Promise<string[]> {
@@ -179,7 +204,37 @@ export class BrowserManager {
     }
   }
 
+  async advanceErpGrid(previousState?: ErpGridState): Promise<ErpGridAdvanceResult> {
+    await this.erpPage.bringToFront().catch(() => undefined);
+    let baseline = previousState ?? (await this.getErpGridState());
+    let latest = baseline;
+
+    for (let attempt = 1; attempt <= ERP_GRID_SCROLL_RETRIES; attempt += 1) {
+      await this.performErpGridAdvanceAttempt();
+      latest = await this.waitForErpGridStabilized();
+      if (didErpGridAdvance(baseline, latest)) {
+        return {
+          state: latest,
+          advanced: true,
+          reachedEnd: isErpGridAtEnd(latest),
+        };
+      }
+
+      baseline = latest;
+    }
+
+    return {
+      state: latest,
+      advanced: false,
+      reachedEnd: isErpGridAtEnd(latest),
+    };
+  }
+
   async scrollErpGrid(): Promise<void> {
+    await this.advanceErpGrid().catch(() => undefined);
+  }
+
+  async performErpGridAdvanceAttempt(): Promise<void> {
     await this.erpPage.bringToFront().catch(() => undefined);
     const rows = this.getVisibleErpRows();
     if ((await rows.count()) > 0) {
@@ -211,11 +266,11 @@ export class BrowserManager {
     await sleep(APP_TIMEOUTS.gridSettle + 250);
   }
 
-  async resetErpGridToTop(): Promise<void> {
+  async resetErpGridToTop(): Promise<ErpGridState> {
     await this.erpPage.bringToFront().catch(() => undefined);
     const rows = this.getVisibleErpRows();
     if ((await rows.count()) === 0) {
-      return;
+      return this.getErpGridState();
     }
 
     const firstRow = rows.first();
@@ -237,6 +292,7 @@ export class BrowserManager {
     await sleep(APP_TIMEOUTS.keyboardSettle);
     await this.erpPage.keyboard.press("Control+Home").catch(() => undefined);
     await sleep(APP_TIMEOUTS.gridSettle + 250);
+    return this.waitForErpGridStabilized();
   }
 
   async getMidasSupportsMultiple(): Promise<boolean> {
@@ -420,6 +476,87 @@ export class BrowserManager {
   getVisibleErpRows() {
     return this.erpPage.locator(`${ERP_SELECTORS.rowInputs}:visible`);
   }
+
+  async waitForErpGridStabilized(timeoutMs = ERP_GRID_SETTLE_TIMEOUT_MS): Promise<ErpGridState> {
+    await this.waitForErpGrid();
+    let previousState = await this.readErpGridState();
+    let stableSamples = 0;
+    const deadline = Date.now() + timeoutMs;
+
+    while (Date.now() < deadline) {
+      await sleep(ERP_GRID_SAMPLE_INTERVAL_MS);
+      const nextState = await this.readErpGridState();
+      if (areErpGridStatesStable(previousState, nextState)) {
+        stableSamples += 1;
+        if (stableSamples >= ERP_GRID_STABLE_SAMPLES) {
+          return nextState;
+        }
+      } else {
+        stableSamples = 0;
+      }
+
+      previousState = nextState;
+    }
+
+    return previousState;
+  }
+
+  async readErpGridState(): Promise<ErpGridState> {
+    const visiblePoNumbers = await this.getVisiblePoNumbers();
+    const rows = this.getVisibleErpRows();
+    const count = await rows.count();
+
+    if (count === 0) {
+      return {
+        visiblePoNumbers,
+        visibleSignature: visiblePoNumbers.join("|"),
+        scrollTop: 0,
+        scrollHeight: 0,
+        clientHeight: 0,
+      };
+    }
+
+    const metrics = await rows.first().evaluate((input) => {
+      const findScrollableAncestor = (start: HTMLElement | null) => {
+        let node = start;
+        while (node) {
+          const style = window.getComputedStyle(node);
+          const overflowY = style.overflowY.toLowerCase();
+          const canScroll =
+            node.scrollHeight > node.clientHeight + 8 &&
+            (overflowY.includes("auto") || overflowY.includes("scroll") || overflowY.includes("overlay"));
+          if (canScroll) {
+            return node;
+          }
+          node = node.parentElement;
+        }
+
+        return null;
+      };
+
+      const container = findScrollableAncestor(input as HTMLElement);
+      if (container) {
+        return {
+          scrollTop: container.scrollTop,
+          scrollHeight: container.scrollHeight,
+          clientHeight: container.clientHeight,
+        };
+      }
+
+      const root = document.scrollingElement ?? document.documentElement;
+      return {
+        scrollTop: root.scrollTop,
+        scrollHeight: root.scrollHeight,
+        clientHeight: window.innerHeight,
+      };
+    });
+
+    return {
+      visiblePoNumbers,
+      visibleSignature: visiblePoNumbers.join("|"),
+      ...metrics,
+    };
+  }
 }
 
 async function resolveChromiumExecutable(
@@ -544,4 +681,24 @@ async function fileExists(target: string): Promise<boolean> {
 
 function sleep(durationMs: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, durationMs));
+}
+
+function didErpGridAdvance(previousState: ErpGridState, nextState: ErpGridState): boolean {
+  return (
+    nextState.visibleSignature !== previousState.visibleSignature ||
+    nextState.scrollTop > previousState.scrollTop + 1 ||
+    nextState.scrollHeight > previousState.scrollHeight + 1
+  );
+}
+
+function areErpGridStatesStable(previousState: ErpGridState, nextState: ErpGridState): boolean {
+  return (
+    nextState.visibleSignature === previousState.visibleSignature &&
+    Math.abs(nextState.scrollTop - previousState.scrollTop) <= 1 &&
+    Math.abs(nextState.scrollHeight - previousState.scrollHeight) <= 1
+  );
+}
+
+function isErpGridAtEnd(state: ErpGridState): boolean {
+  return state.scrollTop + state.clientHeight >= state.scrollHeight - ERP_GRID_END_TOLERANCE_PX;
 }

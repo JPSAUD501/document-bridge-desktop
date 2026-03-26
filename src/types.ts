@@ -75,6 +75,7 @@ export interface RuntimeSnapshot {
   canRetry: boolean;
   browserReady: boolean;
   visibleOcCount?: number;
+  visibleOcCountIsPreview?: boolean;
   discoveredOcCount?: number;
   isDiscoveryComplete?: boolean;
   currentItem?: string;

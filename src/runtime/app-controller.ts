@@ -33,6 +33,7 @@ export class AppController extends EventEmitter {
     canStart: false,
     canRetry: false,
     browserReady: false,
+    visibleOcCountIsPreview: true,
     isDiscoveryComplete: false,
     totalItems: 0,
     counts: buildCounts([]),
@@ -123,7 +124,10 @@ export class AppController extends EventEmitter {
 
     try {
       const visiblePoNumbers = await this.#browserManager.inspectVisiblePoNumbers();
-      this.setSnapshot({ visibleOcCount: visiblePoNumbers.length });
+      this.setSnapshot({
+        visibleOcCount: visiblePoNumbers.length,
+        visibleOcCountIsPreview: true,
+      });
       if (!options.silent) {
         await this.#logger?.info("erp", "Previa do ERP atualizada.", {
           visible: visiblePoNumbers.length,
@@ -174,6 +178,7 @@ export class AppController extends EventEmitter {
         currentItem: undefined,
         currentBatch: undefined,
         discoveredOcCount: manifestStore.items.length,
+        visibleOcCountIsPreview: true,
         isDiscoveryComplete: false,
       });
       await erpCollector.discover();
@@ -182,6 +187,7 @@ export class AppController extends EventEmitter {
         phase: "downloading",
         currentItem: undefined,
         discoveredOcCount: manifestStore.items.length,
+        visibleOcCountIsPreview: true,
         isDiscoveryComplete: true,
       });
       await erpCollector.downloadDiscovered();
@@ -339,6 +345,7 @@ export class AppController extends EventEmitter {
         outputRootDir: path.dirname(runPaths.runDir),
         runDir: runPaths.runDir,
         downloadsDir: runPaths.downloadsDir,
+        visibleOcCountIsPreview: true,
         discoveredOcCount: 0,
         isDiscoveryComplete: false,
       });
@@ -417,7 +424,7 @@ function buildRunStatusMessage(snapshot: RuntimeSnapshot, canRetry: boolean): st
 
   if (snapshot.phase === "ready" && snapshot.waitingForStart) {
     return snapshot.visibleOcCount != null
-      ? `ERP e Midas devem estar prontos. Previa atual: ${snapshot.visibleOcCount} OCs visiveis no ERP. Ao iniciar, voce vai escolher a pasta raiz onde as runs serao salvas.`
+      ? `ERP e Midas devem estar prontos. Previa atual: ${snapshot.visibleOcCount} OCs visiveis na janela atual do ERP. Ao iniciar, voce vai escolher a pasta raiz onde as runs serao salvas.`
       : "ERP e Midas devem estar prontos. Ao iniciar, voce vai escolher a pasta raiz onde as runs serao salvas.";
   }
 

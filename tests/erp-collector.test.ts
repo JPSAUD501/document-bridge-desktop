@@ -2,27 +2,56 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, test, vi } from "vitest";
-import { ErpCollector } from "../src/runtime/erp-collector";
 import { sanitizeFileName } from "../src/lib/utils";
+import type { BrowserManager, ErpGridAdvanceResult, ErpGridState } from "../src/runtime/browser-manager";
+import { ErpCollector } from "../src/runtime/erp-collector";
 import { ManifestStore } from "../src/runtime/manifest-store";
-import type { BrowserManager } from "../src/runtime/browser-manager";
 import type { RunLogger } from "../src/runtime/logger";
 
-function buildBrowserManagerMock(windows: string[][]) {
-  let index = 0;
+function buildGridState(
+  visiblePoNumbers: string[],
+  scrollTop: number,
+  scrollHeight = 2_000,
+  clientHeight = 400,
+): ErpGridState {
+  return {
+    visiblePoNumbers,
+    visibleSignature: visiblePoNumbers.join("|"),
+    scrollTop,
+    scrollHeight,
+    clientHeight,
+  };
+}
+
+function buildAdvanceResult(
+  state: ErpGridState,
+  options: Pick<ErpGridAdvanceResult, "advanced" | "reachedEnd">,
+): ErpGridAdvanceResult {
+  return {
+    state,
+    advanced: options.advanced,
+    reachedEnd: options.reachedEnd,
+  };
+}
+
+function buildBrowserManagerMock(initialState: ErpGridState, advanceResults: ErpGridAdvanceResult[]) {
+  let advanceIndex = 0;
 
   return {
     waitForErpGrid: vi.fn().mockResolvedValue(undefined),
-    inspectVisiblePoNumbers: vi.fn().mockImplementation(async () => windows[0] ?? []),
-    resetErpGridToTop: vi.fn().mockImplementation(async () => {
-      index = 0;
-    }),
-    getVisiblePoNumbers: vi.fn().mockImplementation(async () => windows[Math.min(index, windows.length - 1)] ?? []),
-    scrollErpGrid: vi.fn().mockImplementation(async () => {
-      if (index < windows.length - 1) {
-        index += 1;
+    inspectVisiblePoNumbers: vi.fn().mockResolvedValue(initialState.visiblePoNumbers),
+    getErpGridState: vi.fn().mockResolvedValue(initialState),
+    resetErpGridToTop: vi.fn().mockResolvedValue(initialState),
+    advanceErpGrid: vi.fn().mockImplementation(async () => {
+      const fallback = advanceResults[Math.max(advanceResults.length - 1, 0)];
+      const result = advanceResults[advanceIndex] ?? fallback;
+      if (!result) {
+        throw new Error("Nenhum resultado de avanço do grid foi configurado no teste.");
       }
+      advanceIndex += 1;
+      return result;
     }),
+    scrollErpGrid: vi.fn().mockResolvedValue(undefined),
     openErpPurchaseOrder: vi.fn().mockResolvedValue(undefined),
     downloadErpAttachment: vi.fn().mockImplementation(async (downloadPath: string) => {
       await fs.writeFile(downloadPath, "pdf");
@@ -59,19 +88,34 @@ async function createManifestStore(tempDir: string) {
 }
 
 describe("ErpCollector", () => {
-  test("discovers all unique OCs across a long ERP grid before stabilizing", async () => {
+  test("discovers all unique OCs even when the first scroll attempt does not advance the virtualized grid", async () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "erp-discovery-"));
     tempDirs.push(tempDir);
 
     const manifestStore = await createManifestStore(tempDir);
-    const browserManager = buildBrowserManagerMock([
-      ["OC0001", "OC0002", "OC0003", "OC0004", "OC0005"],
-      ["OC0006", "OC0007", "OC0008", "OC0009", "OC0010"],
-      ["OC0011", "OC0012"],
-      ["OC0011", "OC0012"],
-      ["OC0011", "OC0012"],
-      ["OC0011", "OC0012"],
-      ["OC0011", "OC0012"],
+    const initialState = buildGridState(["OC0001", "OC0002", "OC0003", "OC0004", "OC0005"], 0);
+    const browserManager = buildBrowserManagerMock(initialState, [
+      buildAdvanceResult(initialState, { advanced: false, reachedEnd: false }),
+      buildAdvanceResult(buildGridState(["OC0006", "OC0007", "OC0008", "OC0009", "OC0010"], 500), {
+        advanced: true,
+        reachedEnd: false,
+      }),
+      buildAdvanceResult(buildGridState(["OC0011", "OC0012"], 1_000), {
+        advanced: true,
+        reachedEnd: false,
+      }),
+      buildAdvanceResult(buildGridState(["OC0011", "OC0012"], 1_600), {
+        advanced: false,
+        reachedEnd: true,
+      }),
+      buildAdvanceResult(buildGridState(["OC0011", "OC0012"], 1_600), {
+        advanced: false,
+        reachedEnd: true,
+      }),
+      buildAdvanceResult(buildGridState(["OC0011", "OC0012"], 1_600), {
+        advanced: false,
+        reachedEnd: true,
+      }),
     ]);
     const logger = buildLoggerMock();
 
@@ -87,11 +131,13 @@ describe("ErpCollector", () => {
     await collector.discover();
 
     expect(browserManager.resetErpGridToTop).toHaveBeenCalledTimes(1);
+    expect(browserManager.advanceErpGrid).toHaveBeenCalled();
+    expect(browserManager.advanceErpGrid.mock.calls.length).toBeGreaterThanOrEqual(4);
     expect(manifestStore.items).toHaveLength(12);
     expect(new Set(manifestStore.items.map((item) => item.poNumber)).size).toBe(12);
   });
 
-  test("downloads every discovered OC by scanning the ERP grid from the top again", async () => {
+  test("downloads every discovered OC by reusing the same end-confirmed grid sweep", async () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "erp-download-"));
     tempDirs.push(tempDir);
 
@@ -108,11 +154,29 @@ describe("ErpCollector", () => {
     }
     await manifestStore.persist();
 
-    const browserManager = buildBrowserManagerMock([
-      ["OC0001", "OC0002", "OC0003", "OC0004", "OC0005"],
-      ["OC0006", "OC0007", "OC0008", "OC0009", "OC0010"],
-      ["OC0011", "OC0012"],
-      ["OC0011", "OC0012"],
+    const initialState = buildGridState(["OC0001", "OC0002", "OC0003", "OC0004", "OC0005"], 0);
+    const browserManager = buildBrowserManagerMock(initialState, [
+      buildAdvanceResult(initialState, { advanced: false, reachedEnd: false }),
+      buildAdvanceResult(buildGridState(["OC0006", "OC0007", "OC0008", "OC0009", "OC0010"], 500), {
+        advanced: true,
+        reachedEnd: false,
+      }),
+      buildAdvanceResult(buildGridState(["OC0011", "OC0012"], 1_000), {
+        advanced: true,
+        reachedEnd: false,
+      }),
+      buildAdvanceResult(buildGridState(["OC0011", "OC0012"], 1_600), {
+        advanced: false,
+        reachedEnd: true,
+      }),
+      buildAdvanceResult(buildGridState(["OC0011", "OC0012"], 1_600), {
+        advanced: false,
+        reachedEnd: true,
+      }),
+      buildAdvanceResult(buildGridState(["OC0011", "OC0012"], 1_600), {
+        advanced: false,
+        reachedEnd: true,
+      }),
     ]);
     const logger = buildLoggerMock();
 
@@ -128,6 +192,7 @@ describe("ErpCollector", () => {
     await collector.downloadDiscovered();
 
     expect(browserManager.resetErpGridToTop).toHaveBeenCalledTimes(1);
+    expect(browserManager.advanceErpGrid).toHaveBeenCalled();
     expect(browserManager.openErpPurchaseOrder).toHaveBeenCalledTimes(12);
 
     for (const item of manifestStore.items) {
