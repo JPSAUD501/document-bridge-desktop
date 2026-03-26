@@ -15,6 +15,7 @@ export type UiPhase =
   | "bootstrap"
   | "preflight"
   | "ready"
+  | "discovering"
   | "downloading"
   | "uploading"
   | "summary"
@@ -73,6 +74,9 @@ export interface RuntimeSnapshot {
   canStart: boolean;
   canRetry: boolean;
   browserReady: boolean;
+  visibleOcCount?: number;
+  discoveredOcCount?: number;
+  isDiscoveryComplete?: boolean;
   currentItem?: string;
   currentBatch?: string;
   totalItems: number;

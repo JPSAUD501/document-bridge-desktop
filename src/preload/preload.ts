@@ -13,6 +13,9 @@ const desktopApi: DesktopApi = {
       ipcRenderer.removeListener(ipcChannels.runtime.snapshotChanged, handler);
     };
   },
+  inspectErp: async () => {
+    await ipcRenderer.invoke(ipcChannels.runtime.inspectErp);
+  },
   requestStart: async () => {
     await ipcRenderer.invoke(ipcChannels.runtime.requestStart);
   },

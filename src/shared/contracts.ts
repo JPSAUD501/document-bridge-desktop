@@ -25,6 +25,7 @@ export interface UpdateState {
 export interface DesktopApi {
   getSnapshot: () => Promise<RuntimeSnapshot>;
   subscribeSnapshot: (listener: (snapshot: RuntimeSnapshot) => void) => () => void;
+  inspectErp: () => Promise<void>;
   requestStart: () => Promise<void>;
   retryFailedItems: () => Promise<void>;
   shutdownRun: () => Promise<void>;
@@ -38,6 +39,7 @@ export const ipcChannels = {
   runtime: {
     getSnapshot: "runtime:getSnapshot",
     snapshotChanged: "runtime:snapshotChanged",
+    inspectErp: "runtime:inspectErp",
     requestStart: "runtime:requestStart",
     retryFailedItems: "runtime:retryFailedItems",
     shutdownRun: "runtime:shutdownRun",

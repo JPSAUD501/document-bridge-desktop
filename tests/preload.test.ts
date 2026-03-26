@@ -26,6 +26,7 @@ describe("preload bridge", () => {
     const [, api] = exposeInMainWorld.mock.calls[0]!;
     expect(typeof api.getSnapshot).toBe("function");
     expect(typeof api.subscribeSnapshot).toBe("function");
+    expect(typeof api.inspectErp).toBe("function");
     expect(typeof api.getUpdateState).toBe("function");
 
     const unsubscribe = api.subscribeSnapshot(() => undefined);

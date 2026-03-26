@@ -44,6 +44,16 @@
       "package.json"
     ],
     "asar": true,
+    "extraResources": [
+      {
+        "from": "resources/icon.ico",
+        "to": "icon.ico"
+      },
+      {
+        "from": "resources/tray.png",
+        "to": "tray.png"
+      }
+    ],
     "publish": [
       {
         "provider": "github",

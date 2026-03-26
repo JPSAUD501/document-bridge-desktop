@@ -12,6 +12,7 @@ const phaseLabels: Record<UiPhase, string> = {
   bootstrap: "Inicializacao",
   preflight: "Preparacao",
   ready: "Pronto para iniciar",
+  discovering: "Varrendo OCs",
   downloading: "Baixando PDFs",
   uploading: "Enviando para Midas",
   summary: "Concluido",
@@ -122,6 +123,10 @@ function translateDetailKey(key: string): string {
       return "erro";
     case "total":
       return "total";
+    case "visible":
+      return "visiveis";
+    case "discovered":
+      return "encontradas";
     default:
       return key;
   }

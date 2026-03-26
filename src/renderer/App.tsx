@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type ReactElement } from "react";
+import { useEffect, useMemo, useState, useRef, type ReactElement } from "react";
 import { motion, AnimatePresence, useMotionValue, useTransform, animate } from "motion/react";
 import {
   Play,
@@ -14,6 +14,14 @@ import {
   Globe,
   Loader2,
   AlertTriangle,
+  ChevronRight,
+  ChevronLeft,
+  X,
+  Zap,
+  BarChart3,
+  ListFilter,
+  Rocket,
+  HelpCircle,
 } from "lucide-react";
 import {
   formatLogDetails,
@@ -41,6 +49,7 @@ const emptySnapshot: RuntimeSnapshot = {
   canStart: false,
   canRetry: false,
   browserReady: false,
+  isDiscoveryComplete: false,
   totalItems: 0,
   counts: {
     total: 0,
@@ -182,7 +191,7 @@ function PegasusLogo(): ReactElement {
 export function App(): ReactElement {
   const [snapshot, setSnapshot] = useState<RuntimeSnapshot>(emptySnapshot);
   const [updateState, setUpdateState] = useState<UpdateState>(defaultUpdateState);
-  const [busyAction, setBusyAction] = useState<"start" | "retry" | "folder" | "update" | null>(null);
+  const [busyAction, setBusyAction] = useState<"inspect" | "start" | "retry" | "folder" | "update" | null>(null);
 
   useEffect(() => {
     let mounted = true;
@@ -209,6 +218,11 @@ export function App(): ReactElement {
   const startRun = async () => {
     setBusyAction("start");
     try { await window.erpMidas.requestStart(); } finally { setBusyAction(null); }
+  };
+
+  const inspectErp = async () => {
+    setBusyAction("inspect");
+    try { await window.erpMidas.inspectErp(); } finally { setBusyAction(null); }
   };
 
   const retryRun = async () => {
@@ -249,6 +263,7 @@ export function App(): ReactElement {
           <ActionBar
             snapshot={snapshot}
             busyAction={busyAction}
+            onInspect={() => void inspectErp()}
             onStart={() => void startRun()}
             onRetry={() => void retryRun()}
             onFolder={() => void openRunFolder()}
@@ -356,7 +371,7 @@ function AppHeader({
 }
 
 function PhaseBadge({ phase }: { phase: UiPhase }): ReactElement {
-  const isActive = phase === "downloading" || phase === "uploading";
+  const isActive = phase === "discovering" || phase === "downloading" || phase === "uploading";
 
   return (
     <div className={`phase-badge phase-badge--${phase}`}>
@@ -404,12 +419,14 @@ function StatusPill({
 function ActionBar({
   snapshot,
   busyAction,
+  onInspect,
   onStart,
   onRetry,
   onFolder,
 }: {
   snapshot: RuntimeSnapshot;
-  busyAction: "start" | "retry" | "folder" | "update" | null;
+  busyAction: "inspect" | "start" | "retry" | "folder" | "update" | null;
+  onInspect: () => void;
   onStart: () => void;
   onRetry: () => void;
   onFolder: () => void;
@@ -417,6 +434,21 @@ function ActionBar({
   return (
     <section className="action-bar">
       <div className="action-bar__buttons">
+        <motion.button
+          className="btn btn--secondary"
+          onClick={onInspect}
+          disabled={!snapshot.browserReady || !snapshot.waitingForStart || busyAction !== null}
+          whileHover={snapshot.browserReady && snapshot.waitingForStart && busyAction === null ? { scale: 1.02 } : {}}
+          whileTap={snapshot.browserReady && snapshot.waitingForStart && busyAction === null ? { scale: 0.97 } : {}}
+        >
+          {busyAction === "inspect" ? (
+            <Loader2 size={15} className="btn__icon btn__icon--spin" />
+          ) : (
+            <RefreshCw size={15} className="btn__icon" />
+          )}
+          {busyAction === "inspect" ? "Lendo ERP..." : "Atualizar previa ERP"}
+        </motion.button>
+
         <motion.button
           className="btn btn--primary"
           onClick={onStart}
@@ -524,6 +556,25 @@ function MetricsSection({ snapshot }: { snapshot: RuntimeSnapshot }): ReactEleme
   const ulPct  = total > 0 ? Math.round((counts.uploaded / total) * 100)   : 0;
 
   const metrics: MetricDef[] = [
+    {
+      label: "OCs visiveis",
+      value: snapshot.visibleOcCount ?? 0,
+      tone: "dark",
+      icon: <Globe size={16} />,
+      subtitle: snapshot.visibleOcCount != null ? "Previa ERP" : "Sem leitura",
+    },
+    {
+      label: "Total encontrado",
+      value: snapshot.discoveredOcCount ?? 0,
+      tone: snapshot.isDiscoveryComplete ? "green" : "blue",
+      icon: <ArrowRightCircle size={16} />,
+      subtitle:
+        snapshot.discoveredOcCount != null
+          ? snapshot.isDiscoveryComplete
+            ? "Varredura concluida"
+            : "Varredura em andamento"
+          : "Aguardando varredura",
+    },
     { label: "Total",        value: counts.total,                             tone: "dark",  icon: <FileText size={16} /> },
     { label: "Pendentes",    value: counts.pending,                           tone: "amber", icon: <Clock size={16} />,          pulse: counts.pending > 0 },
     { label: "Baixando",     value: counts.downloading,                       tone: "blue",  icon: <Download size={16} />,        pulse: counts.downloading > 0 },
@@ -622,6 +673,13 @@ function ProgressBar({
    ============================================================ */
 
 function OperationPanel({ snapshot }: { snapshot: RuntimeSnapshot }): ReactElement {
+  const discoveredLabel =
+    snapshot.discoveredOcCount != null
+      ? snapshot.isDiscoveryComplete
+        ? `${snapshot.discoveredOcCount} (varredura concluida)`
+        : `${snapshot.discoveredOcCount} (varredura em andamento)`
+      : "Aguardando inicio da varredura completa.";
+
   return (
     <div className="panel">
       <div className="panel__header">
@@ -641,6 +699,14 @@ function OperationPanel({ snapshot }: { snapshot: RuntimeSnapshot }): ReactEleme
         <DetailRow label="Nota atual"           value={snapshot.currentItem   || "Nenhuma nota ativa no momento."} />
         <DetailRow label="Lote atual"           value={snapshot.currentBatch  || "Nenhum lote em processamento."} />
       </dl>
+
+      <div className="steps-guide">
+        <div className="steps-guide__title">Resumo do ERP</div>
+        <ol className="steps-guide__list">
+          <li>OCs visiveis agora: {snapshot.visibleOcCount ?? 0}</li>
+          <li>OCs encontradas na varredura: {discoveredLabel}</li>
+        </ol>
+      </div>
 
       <div className="steps-guide">
         <div className="steps-guide__title">Fluxo recomendado</div>

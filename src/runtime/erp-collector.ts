@@ -14,6 +14,10 @@ interface ErpCollectorOptions {
   onManifestChanged: () => Promise<void>;
 }
 
+const ERP_STABLE_PASSES = 4;
+const ERP_REPEATED_SIGNATURE_PASSES = 2;
+const ERP_MAX_SCAN_PASSES = 500;
+
 export class ErpCollector {
   readonly #browserManager: BrowserManager;
   readonly #downloadsDir: string;
@@ -32,30 +36,26 @@ export class ErpCollector {
   }
 
   async run(): Promise<void> {
-    await this.#logger.info("erp", "Lendo a grade filtrada do ERP.");
+    await this.discover();
+    await this.downloadDiscovered();
+  }
+
+  async discover(): Promise<void> {
+    await this.#logger.info("erp", "Iniciando a varredura completa da grade do ERP.");
     await this.#browserManager.waitForErpGrid();
 
-    const processed = new Set(
-      this.#manifestStore.items
-        .filter((item) => item.downloadStatus === "downloaded" || item.downloadStatus === "download_failed")
-        .map((item) => item.poNumber),
-    );
+    const knownPoNumbers = new Set(this.#manifestStore.items.map((item) => item.poNumber));
+    let sourceRow = this.#manifestStore.items.reduce((highest, item) => Math.max(highest, item.sourceRow), 0);
 
-    let sourceRow = this.#manifestStore.items.length;
-    let stablePasses = 0;
-    let previousVisibleSignature = "";
-
-    while (stablePasses < 4) {
-      const visiblePoNumbers = await this.#browserManager.getVisiblePoNumbers();
-      const currentVisibleSignature = visiblePoNumbers.join("|");
+    await this.scanErpGridUntilStable(async (visiblePoNumbers) => {
       let foundNew = false;
 
       for (const poNumber of visiblePoNumbers) {
-        if (processed.has(poNumber)) {
+        if (knownPoNumbers.has(poNumber)) {
           continue;
         }
 
-        processed.add(poNumber);
+        knownPoNumbers.add(poNumber);
         foundNew = true;
         sourceRow += 1;
         this.#manifestStore.ensureItem({
@@ -63,23 +63,105 @@ export class ErpCollector {
           poNumber,
           sourceRow,
         });
-        await this.#manifestStore.persist();
-        await this.#onManifestChanged();
-        await this.processPurchaseOrder(poNumber);
       }
 
-      stablePasses =
-        !foundNew && currentVisibleSignature === previousVisibleSignature
-          ? stablePasses + 1
-          : 0;
-      previousVisibleSignature = currentVisibleSignature;
-      await this.#browserManager.scrollErpGrid();
-    }
+      if (foundNew) {
+        await this.#manifestStore.persist();
+        await this.#onManifestChanged();
+      }
+
+      return { progress: foundNew };
+    });
 
     await this.#onCurrentItem(undefined);
+    await this.#logger.info("erp", "Varredura da grade do ERP concluida.", {
+      total: this.#manifestStore.items.length,
+    });
+  }
+
+  async downloadDiscovered(): Promise<void> {
+    const pendingPoNumbers = new Set<string>();
+
+    for (const item of this.getOrderedItems()) {
+      if (item.uploadStatus === "uploaded") {
+        continue;
+      }
+
+      if (await this.reuseExistingDownload(item.id)) {
+        continue;
+      }
+
+      if (item.downloadStatus !== "pending") {
+        await this.#manifestStore.updateItem(item.id, {
+          originalFileName: undefined,
+          savedFileName: undefined,
+          downloadPath: undefined,
+          downloadStatus: "pending",
+          uploadStatus: "pending",
+          lastError: undefined,
+        });
+      }
+
+      pendingPoNumbers.add(item.poNumber);
+    }
+
+    await this.#onManifestChanged();
     await this.#logger.info("erp", "Leitura da grade do ERP concluida.", {
       total: this.#manifestStore.items.length,
     });
+
+    if (pendingPoNumbers.size === 0) {
+      await this.#logger.info("erp", "Nenhum PDF pendente para baixar no ERP.");
+      return;
+    }
+
+    await this.#logger.info("erp", "Iniciando o download dos PDFs descobertos no ERP.", {
+      pending: pendingPoNumbers.size,
+      discovered: this.#manifestStore.items.length,
+    });
+
+    await this.scanErpGridUntilStable(async (visiblePoNumbers) => {
+      let processedAny = false;
+
+      for (const poNumber of visiblePoNumbers) {
+        if (!pendingPoNumbers.has(poNumber)) {
+          continue;
+        }
+
+        processedAny = true;
+        pendingPoNumbers.delete(poNumber);
+        await this.processPurchaseOrder(poNumber);
+
+        if (pendingPoNumbers.size === 0) {
+          return { progress: true, stop: true };
+        }
+      }
+
+      return { progress: processedAny };
+    });
+
+    if (pendingPoNumbers.size > 0) {
+      const unresolvedError = "A OC nao foi reencontrada na grade do ERP durante a etapa de download.";
+      for (const poNumber of pendingPoNumbers) {
+        const item = this.#manifestStore.findById(sanitizeFileName(poNumber));
+        if (!item || item.uploadStatus === "uploaded") {
+          continue;
+        }
+
+        await this.#manifestStore.updateItem(item.id, {
+          downloadStatus: "download_failed",
+          uploadStatus: "pending",
+          lastError: unresolvedError,
+        });
+      }
+      await this.#onManifestChanged();
+      await this.#logger.error("erp", "Nem todas as OCs descobertas puderam ser reencontradas para download.", {
+        pending: pendingPoNumbers.size,
+        discovered: this.#manifestStore.items.length,
+      });
+    }
+
+    await this.#onCurrentItem(undefined);
   }
 
   async processPurchaseOrder(poNumber: string): Promise<void> {
@@ -89,27 +171,7 @@ export class ErpCollector {
       throw new Error(`Item do manifesto nao encontrado para ${poNumber}`);
     }
 
-    if (item.downloadStatus === "downloaded" && item.downloadPath && (await fileExists(item.downloadPath))) {
-      const repairedSavedFileName = normalizePdfFileName(
-        item.savedFileName ?? path.basename(item.downloadPath),
-        `${poNumber}.pdf`,
-      );
-      const repairedDownloadPath = path.join(this.#downloadsDir, repairedSavedFileName);
-
-      if (repairedDownloadPath !== item.downloadPath) {
-        await fs.rename(item.downloadPath, repairedDownloadPath);
-      }
-
-      await this.#manifestStore.updateItem(itemId, {
-        originalFileName: item.originalFileName
-          ? normalizePdfFileName(item.originalFileName, `${poNumber}.pdf`)
-          : undefined,
-        savedFileName: repairedSavedFileName,
-        downloadPath: repairedDownloadPath,
-        uploadStatus: "queued_for_upload",
-      });
-      await this.#onManifestChanged();
-      await this.#logger.info("erp", "PDF ja existente; reaproveitando arquivo salvo.", { poNumber });
+    if (await this.reuseExistingDownload(itemId)) {
       return;
     }
 
@@ -163,5 +225,83 @@ export class ErpCollector {
         error: summarizeError(error),
       });
     }
+  }
+
+  async scanErpGridUntilStable(
+    onVisiblePoNumbers: (
+      visiblePoNumbers: string[],
+    ) => Promise<{ progress: boolean; stop?: boolean }>,
+  ): Promise<void> {
+    await this.#browserManager.waitForErpGrid();
+    await this.#browserManager.resetErpGridToTop().catch(() => undefined);
+
+    let stablePasses = 0;
+    let repeatedSignaturePasses = 0;
+    let previousVisibleSignature = "";
+
+    for (let pass = 0; pass < ERP_MAX_SCAN_PASSES; pass += 1) {
+      const visiblePoNumbers = await this.#browserManager.getVisiblePoNumbers();
+      const currentVisibleSignature = visiblePoNumbers.join("|");
+      const { progress, stop } = await onVisiblePoNumbers(visiblePoNumbers);
+
+      if (stop) {
+        return;
+      }
+
+      stablePasses = progress ? 0 : stablePasses + 1;
+      repeatedSignaturePasses =
+        currentVisibleSignature === previousVisibleSignature ? repeatedSignaturePasses + 1 : 0;
+      previousVisibleSignature = currentVisibleSignature;
+
+      if (
+        stablePasses >= ERP_STABLE_PASSES &&
+        repeatedSignaturePasses >= ERP_REPEATED_SIGNATURE_PASSES
+      ) {
+        return;
+      }
+
+      await this.#browserManager.scrollErpGrid();
+    }
+
+    throw new Error("A varredura do ERP excedeu o limite de iteracoes sem estabilizar.");
+  }
+
+  getOrderedItems() {
+    return [...this.#manifestStore.items].sort((left, right) => left.sourceRow - right.sourceRow);
+  }
+
+  async reuseExistingDownload(itemId: string): Promise<boolean> {
+    const item = this.#manifestStore.findById(itemId);
+    if (!item || item.downloadStatus !== "downloaded" || !item.downloadPath) {
+      return false;
+    }
+
+    if (!(await fileExists(item.downloadPath))) {
+      return false;
+    }
+
+    const repairedSavedFileName = normalizePdfFileName(
+      item.savedFileName ?? path.basename(item.downloadPath),
+      `${item.poNumber}.pdf`,
+    );
+    const repairedDownloadPath = path.join(this.#downloadsDir, repairedSavedFileName);
+
+    if (repairedDownloadPath !== item.downloadPath) {
+      await fs.rename(item.downloadPath, repairedDownloadPath);
+    }
+
+    await this.#manifestStore.updateItem(itemId, {
+      originalFileName: item.originalFileName
+        ? normalizePdfFileName(item.originalFileName, `${item.poNumber}.pdf`)
+        : undefined,
+      savedFileName: repairedSavedFileName,
+      downloadPath: repairedDownloadPath,
+      uploadStatus: "queued_for_upload",
+    });
+    await this.#onManifestChanged();
+    await this.#logger.info("erp", "PDF ja existente; reaproveitando arquivo salvo.", {
+      poNumber: item.poNumber,
+    });
+    return true;
   }
 }

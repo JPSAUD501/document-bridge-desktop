@@ -33,6 +33,7 @@ export class AppController extends EventEmitter {
     canStart: false,
     canRetry: false,
     browserReady: false,
+    isDiscoveryComplete: false,
     totalItems: 0,
     counts: buildCounts([]),
     recentLogs: [],
@@ -80,6 +81,7 @@ export class AppController extends EventEmitter {
         browserReady: true,
         waitingForStart: true,
       });
+      await this.inspectErpVisibleCount({ silent: true });
     } catch (error) {
       const message = summarizeError(error);
       await this.#logger?.error("system", "Falha na inicializacao.", { error: message });
@@ -114,6 +116,28 @@ export class AppController extends EventEmitter {
     this.#startResolver();
   }
 
+  async inspectErpVisibleCount(options: { silent?: boolean } = {}): Promise<void> {
+    if (!this.#browserManager || this.#executionStarted || this.#executionInFlight) {
+      return;
+    }
+
+    try {
+      const visiblePoNumbers = await this.#browserManager.inspectVisiblePoNumbers();
+      this.setSnapshot({ visibleOcCount: visiblePoNumbers.length });
+      if (!options.silent) {
+        await this.#logger?.info("erp", "Previa do ERP atualizada.", {
+          visible: visiblePoNumbers.length,
+        });
+      }
+    } catch (error) {
+      if (!options.silent) {
+        await this.#logger?.warn("erp", "Falha ao atualizar a previa do ERP.", {
+          error: summarizeError(error),
+        });
+      }
+    }
+  }
+
   async waitForStartSignal(): Promise<void> {
     await new Promise<void>((resolve) => {
       this.#startResolver = resolve;
@@ -145,8 +169,22 @@ export class AppController extends EventEmitter {
         onManifestChanged: async () => this.refreshSnapshot(),
       });
 
-      this.setSnapshot({ phase: "downloading" });
-      await erpCollector.run();
+      this.setSnapshot({
+        phase: "discovering",
+        currentItem: undefined,
+        currentBatch: undefined,
+        discoveredOcCount: manifestStore.items.length,
+        isDiscoveryComplete: false,
+      });
+      await erpCollector.discover();
+      await this.refreshSnapshot();
+      this.setSnapshot({
+        phase: "downloading",
+        currentItem: undefined,
+        discoveredOcCount: manifestStore.items.length,
+        isDiscoveryComplete: true,
+      });
+      await erpCollector.downloadDiscovered();
       await this.refreshSnapshot();
 
       const uploader = new MidasUploader({
@@ -238,6 +276,10 @@ export class AppController extends EventEmitter {
     const items = [...this.requireManifestStore().items].sort((left, right) => left.sourceRow - right.sourceRow);
     this.setSnapshot({
       totalItems: items.length,
+      discoveredOcCount:
+        items.length > 0 || this.#snapshot.phase === "discovering" || this.#snapshot.isDiscoveryComplete
+          ? items.length
+          : this.#snapshot.discoveredOcCount,
       manifestItems: items,
       counts: buildCounts(items),
     });
@@ -297,6 +339,8 @@ export class AppController extends EventEmitter {
         outputRootDir: path.dirname(runPaths.runDir),
         runDir: runPaths.runDir,
         downloadsDir: runPaths.downloadsDir,
+        discoveredOcCount: 0,
+        isDiscoveryComplete: false,
       });
 
       const logger = new RunLogger(runPaths.logPath);
@@ -372,11 +416,21 @@ function buildRunStatusMessage(snapshot: RuntimeSnapshot, canRetry: boolean): st
   }
 
   if (snapshot.phase === "ready" && snapshot.waitingForStart) {
-    return "ERP e Midas devem estar prontos. Ao iniciar, voce vai escolher a pasta raiz onde as runs serao salvas.";
+    return snapshot.visibleOcCount != null
+      ? `ERP e Midas devem estar prontos. Previa atual: ${snapshot.visibleOcCount} OCs visiveis no ERP. Ao iniciar, voce vai escolher a pasta raiz onde as runs serao salvas.`
+      : "ERP e Midas devem estar prontos. Ao iniciar, voce vai escolher a pasta raiz onde as runs serao salvas.";
+  }
+
+  if (snapshot.phase === "discovering") {
+    return snapshot.discoveredOcCount != null && snapshot.discoveredOcCount > 0
+      ? `Varrendo o ERP para mapear todas as OCs filtradas. ${snapshot.discoveredOcCount} OCs ja foram encontradas.`
+      : "Varrendo o ERP para mapear todas as OCs filtradas antes dos downloads.";
   }
 
   if (snapshot.phase === "downloading") {
-    return "Baixando os PDFs do ERP. Mantenha o navegador aberto ate o lote terminar.";
+    return snapshot.discoveredOcCount != null && snapshot.discoveredOcCount > 0
+      ? `Baixando os PDFs do ERP para ${snapshot.discoveredOcCount} OCs descobertas. Mantenha o navegador aberto ate o lote terminar.`
+      : "Baixando os PDFs do ERP. Mantenha o navegador aberto ate o lote terminar.";
   }
 
   if (snapshot.phase === "uploading") {

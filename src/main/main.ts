@@ -9,6 +9,11 @@ import { UpdateService } from "./services/update/update-service";
 const rendererHtmlPath = path.join(__dirname, "..", "..", "dist", "index.html");
 const preloadPath = path.join(__dirname, "..", "preload", "index.cjs");
 
+// Resolve icon path: packaged app uses process.resourcesPath, dev uses project root
+const iconPath = app.isPackaged
+  ? path.join(process.resourcesPath, "icon.ico")
+  : path.join(__dirname, "..", "..", "resources", "icon.ico");
+
 let mainWindow: BrowserWindow | null = null;
 let disposeIpc: (() => void) | undefined;
 
@@ -54,8 +59,9 @@ function createMainWindow(): BrowserWindow {
     height: 940,
     minWidth: 1180,
     minHeight: 780,
-    backgroundColor: "#0d1420",
+    backgroundColor: "#efe7da",
     title: "Pegasus",
+    icon: iconPath,
     autoHideMenuBar: true,
     show: false,
     webPreferences: {

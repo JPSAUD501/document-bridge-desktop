@@ -19,6 +19,7 @@ export function registerIpc({
   const disposers: Array<() => void> = [];
 
   ipcMain.handle(ipcChannels.runtime.getSnapshot, async () => runtime.getSnapshot());
+  ipcMain.handle(ipcChannels.runtime.inspectErp, async () => runtime.inspectErp());
   ipcMain.handle(ipcChannels.runtime.requestStart, async () => runtime.requestStart());
   ipcMain.handle(ipcChannels.runtime.retryFailedItems, async () => runtime.retryFailedItems());
   ipcMain.handle(ipcChannels.runtime.shutdownRun, async () => runtime.shutdown());
@@ -41,6 +42,7 @@ export function registerIpc({
     }
 
     ipcMain.removeHandler(ipcChannels.runtime.getSnapshot);
+    ipcMain.removeHandler(ipcChannels.runtime.inspectErp);
     ipcMain.removeHandler(ipcChannels.runtime.requestStart);
     ipcMain.removeHandler(ipcChannels.runtime.retryFailedItems);
     ipcMain.removeHandler(ipcChannels.runtime.shutdownRun);

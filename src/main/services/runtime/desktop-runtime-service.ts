@@ -43,6 +43,10 @@ export class DesktopRuntimeService extends EventEmitter {
     void this.run();
   }
 
+  async inspectErp(): Promise<void> {
+    await this.#getController().inspectErpVisibleCount();
+  }
+
   async requestStart(): Promise<void> {
     const controller = this.#getController();
     const snapshot = controller.snapshot;

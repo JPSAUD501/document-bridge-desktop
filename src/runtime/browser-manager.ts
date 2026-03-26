@@ -72,8 +72,13 @@ export class BrowserManager {
     return this.#midasPage;
   }
 
-  async waitForErpGrid(): Promise<void> {
-    await this.getVisibleErpRows().first().waitFor({ timeout: APP_TIMEOUTS.long });
+  async waitForErpGrid(timeoutMs = APP_TIMEOUTS.long): Promise<void> {
+    await this.getVisibleErpRows().first().waitFor({ timeout: timeoutMs });
+  }
+
+  async inspectVisiblePoNumbers(timeoutMs = APP_TIMEOUTS.medium): Promise<string[]> {
+    await this.waitForErpGrid(timeoutMs);
+    return this.getVisiblePoNumbers();
   }
 
   async getVisiblePoNumbers(): Promise<string[]> {
@@ -178,13 +183,59 @@ export class BrowserManager {
     await this.erpPage.bringToFront().catch(() => undefined);
     const rows = this.getVisibleErpRows();
     if ((await rows.count()) > 0) {
-      await rows.last().click({ timeout: APP_TIMEOUTS.medium }).catch(() => undefined);
+      const lastRow = rows.last();
+      await lastRow.click({ timeout: APP_TIMEOUTS.medium }).catch(() => undefined);
+      await lastRow
+        .evaluate((input) => {
+          let node: HTMLElement | null = input as HTMLElement;
+          while (node) {
+            if (node.scrollHeight > node.clientHeight + 20) {
+              const delta = Math.max(node.clientHeight * 0.9, 600);
+              node.scrollTo({
+                top: Math.min(node.scrollTop + delta, node.scrollHeight),
+                behavior: "auto",
+              });
+              return;
+            }
+            node = node.parentElement;
+          }
+          window.scrollBy({ top: 900, behavior: "auto" });
+        })
+        .catch(() => undefined);
       await sleep(APP_TIMEOUTS.keyboardSettle);
       await this.erpPage.keyboard.press("PageDown").catch(() => undefined);
       await sleep(APP_TIMEOUTS.gridSettle);
     }
 
-    await this.erpPage.mouse.wheel(0, 900);
+    await this.erpPage.mouse.wheel(0, 1200);
+    await sleep(APP_TIMEOUTS.gridSettle + 250);
+  }
+
+  async resetErpGridToTop(): Promise<void> {
+    await this.erpPage.bringToFront().catch(() => undefined);
+    const rows = this.getVisibleErpRows();
+    if ((await rows.count()) === 0) {
+      return;
+    }
+
+    const firstRow = rows.first();
+    await firstRow.click({ timeout: APP_TIMEOUTS.medium }).catch(() => undefined);
+    await firstRow
+      .evaluate((input) => {
+        let node: HTMLElement | null = input as HTMLElement;
+        while (node) {
+          if (node.scrollHeight > node.clientHeight + 20) {
+            node.scrollTo({ top: 0, behavior: "auto" });
+            return;
+          }
+          node = node.parentElement;
+        }
+        window.scrollTo({ top: 0, behavior: "auto" });
+      })
+      .catch(() => undefined);
+
+    await sleep(APP_TIMEOUTS.keyboardSettle);
+    await this.erpPage.keyboard.press("Control+Home").catch(() => undefined);
     await sleep(APP_TIMEOUTS.gridSettle + 250);
   }
 
