@@ -5,7 +5,7 @@ import type { BrowserManager } from "./browser-manager";
 import type { ManifestStore } from "./manifest-store";
 import type { RunLogger } from "./logger";
 
-const MIDAS_BATCH_SIZE = 15;
+const MIDAS_BATCH_SIZE = 5;
 
 interface MidasUploaderOptions {
   browserManager: BrowserManager;

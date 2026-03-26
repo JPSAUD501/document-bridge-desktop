@@ -180,12 +180,14 @@ export class BrowserManager {
   }
 
   async getMidasSupportsMultiple(): Promise<boolean> {
+    await this.ensureMidasReadyForUpload();
     const input = this.midasPage.locator(MIDAS_SELECTORS.fileInput).first();
     await input.waitFor({ state: "attached", timeout: APP_TIMEOUTS.long });
     return (await input.getAttribute("multiple")) !== null;
   }
 
   async uploadMidasFiles(filePaths: string[]): Promise<{ toastText?: string }> {
+    await this.ensureMidasReadyForUpload();
     const input = this.midasPage.locator(MIDAS_SELECTORS.fileInput).first();
     await input.waitFor({ state: "attached", timeout: APP_TIMEOUTS.long });
 
@@ -219,6 +221,39 @@ export class BrowserManager {
     throw new Error(
       `O botao Enviar permaneceu desabilitado apos anexar ${fileCount} arquivo(s) na Midas.`,
     );
+  }
+
+  async ensureMidasReadyForUpload(): Promise<void> {
+    const newDocumentButton = this.midasPage.getByRole("button", { name: /enviar novo documento/i }).first();
+    if (await newDocumentButton.isVisible().catch(() => false)) {
+      await this.#onStatus?.("Retornando da tela de sucesso da Midas para um novo envio.");
+      await newDocumentButton.scrollIntoViewIfNeeded().catch(() => undefined);
+      await newDocumentButton.click({ timeout: APP_TIMEOUTS.long });
+    }
+
+    const input = this.midasPage.locator(MIDAS_SELECTORS.fileInput).first();
+    await input.waitFor({ state: "attached", timeout: APP_TIMEOUTS.long });
+    await this.ensureMidasDocumentType("Nfse");
+  }
+
+  async ensureMidasDocumentType(documentType: string): Promise<void> {
+    const combo = this.midasPage.getByRole("combobox").first();
+    await combo.waitFor({ state: "visible", timeout: APP_TIMEOUTS.long });
+
+    const currentValue = ((await combo.inputValue().catch(() => "")) || (await combo.textContent()) || "")
+      .trim()
+      .toLowerCase();
+
+    if (currentValue.includes(documentType.toLowerCase())) {
+      return;
+    }
+
+    await this.#onStatus?.(`Selecionando o tipo de documento ${documentType} na Midas.`);
+    await combo.click({ timeout: APP_TIMEOUTS.medium });
+
+    const option = this.midasPage.getByRole("option", { name: new RegExp(documentType, "i") }).first();
+    await option.waitFor({ state: "visible", timeout: APP_TIMEOUTS.long });
+    await option.click({ timeout: APP_TIMEOUTS.medium });
   }
 
   async waitForMidasSuccessToast(): Promise<string> {
