@@ -54,7 +54,7 @@
     "generateUpdatesFilesForAllChannels": true,
     "win": {
       "signAndEditExecutable": false,
-      "icon": "resources/icon.png",
+      "icon": "resources/icon.ico",
       "target": [
         "nsis"
       ]
@@ -63,8 +63,8 @@
       "oneClick": true,
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
-      "installerIcon": "resources/icon.png",
-      "uninstallerIcon": "resources/icon.png"
+      "installerIcon": "resources/icon.ico",
+      "uninstallerIcon": "resources/icon.ico"
     }
   },
   "dependencies": {
@@ -92,6 +92,7 @@
     "electron": "^37.2.1",
     "electron-builder": "^26.0.12",
     "esbuild": "^0.25.9",
+    "png-to-ico": "^3.0.1",
     "tailwindcss": "^4.2.2",
     "tsx": "^4.21.0",
     "typescript": "^5.9.3",

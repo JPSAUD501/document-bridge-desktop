@@ -1,11 +1,12 @@
 /**
  * generate-icons.mjs
- * Generates PNG icons from the Pegasus SVG logo.
+ * Generates PNG + ICO icons from the Pegasus SVG logo.
  * Usage: node scripts/generate-icons.mjs
- * Requires: npm install @resvg/resvg-js (devDependency)
+ * Requires: @resvg/resvg-js, png-to-ico (devDependencies)
  */
 
 import { Resvg } from "@resvg/resvg-js";
+import pngToIco from "png-to-ico";
 import { readFileSync, writeFileSync } from "fs";
 import { join, dirname } from "path";
 import { fileURLToPath } from "url";
@@ -17,7 +18,7 @@ const resourcesDir = join(rootDir, "resources");
 const svgPath = join(resourcesDir, "icon.svg");
 const svgContent = readFileSync(svgPath, "utf-8");
 
-function renderSvg(width) {
+function renderPng(width) {
   const resvg = new Resvg(svgContent, {
     fitTo: { mode: "width", value: width },
     background: "transparent",
@@ -25,20 +26,29 @@ function renderSvg(width) {
   return resvg.render().asPng();
 }
 
-// Main app icon (electron-builder uses 512x512 PNG → auto-converts to ICO)
+// Render all sizes
 const sizes = [16, 32, 48, 64, 128, 256, 512];
+const pngBuffers = {};
 for (const size of sizes) {
+  pngBuffers[size] = renderPng(size);
   const out = join(resourcesDir, `icon-${size}.png`);
-  writeFileSync(out, renderSvg(size));
+  writeFileSync(out, pngBuffers[size]);
   console.log(`✓  icon-${size}.png`);
 }
 
-// Primary icon (referenced by electron-builder)
-writeFileSync(join(resourcesDir, "icon.png"), renderSvg(512));
-console.log("✓  icon.png (512×512) — used by electron-builder");
+// Main 512×512 PNG (used for general references)
+writeFileSync(join(resourcesDir, "icon.png"), pngBuffers[512]);
+console.log("✓  icon.png (512×512)");
 
-// Tray icon
-writeFileSync(join(resourcesDir, "tray.png"), renderSvg(32));
+// Tray icon 32×32
+writeFileSync(join(resourcesDir, "tray.png"), pngBuffers[32]);
 console.log("✓  tray.png (32×32)");
+
+// ICO file — NSIS and Windows shell require a real .ico
+// Embed sizes: 16, 32, 48, 64, 128, 256
+const icoSizes = [16, 32, 48, 64, 128, 256];
+const icoBuffer = await pngToIco(icoSizes.map((s) => pngBuffers[s]));
+writeFileSync(join(resourcesDir, "icon.ico"), icoBuffer);
+console.log("✓  icon.ico (16/32/48/64/128/256) — used by NSIS installer");
 
 console.log("\nDone. Run `npm run package` to build the installer.");
