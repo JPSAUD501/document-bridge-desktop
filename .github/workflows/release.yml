@@ -1,4 +1,4 @@
-name: Release Document Bridge Desktop
+name: Release Pegasus Desktop
 
 on:
   push:
@@ -119,7 +119,7 @@ jobs:
             const names = (release.assets ?? []).map((asset) => asset.name);
             const expected = [
               "latest.yml",
-              "Document-Bridge-Setup",
+              "Pegasus-Setup",
             ];
 
             const missing = expected.filter((pattern) => !names.some((name) => name.includes(pattern)));
