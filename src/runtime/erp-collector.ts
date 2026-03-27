@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { buildSavedPdfName, fileExists, normalizePdfFileName, sanitizeFileName, summarizeError } from "../lib/utils";
+import { buildManifestItemId, buildSavedPdfName, fileExists, normalizePdfFileName, summarizeError } from "../lib/utils";
 import type { BrowserManager, ErpGridState } from "./browser-manager";
 import type { ManifestStore } from "./manifest-store";
 import type { RunLogger } from "./logger";
@@ -43,25 +43,26 @@ export class ErpCollector {
     await this.#logger.info("erp", "Iniciando a varredura completa da grade do ERP.");
     await this.#browserManager.waitForErpGrid();
 
-    const knownPoNumbers = new Set(this.#manifestStore.items.map((item) => item.poNumber));
+    const knownRowKeys = new Set(this.#manifestStore.items.map((item) => item.rowKey ?? item.id));
     let sourceRow = this.#manifestStore.items.reduce((highest, item) => Math.max(highest, item.sourceRow), 0);
 
     await this.scanErpGridUntilEnd(async (state) => {
       let foundNew = false;
       let foundCount = 0;
 
-      for (const poNumber of state.visiblePoNumbers) {
-        if (knownPoNumbers.has(poNumber)) {
+      for (const visibleItem of state.visibleItems) {
+        if (knownRowKeys.has(visibleItem.rowKey)) {
           continue;
         }
 
-        knownPoNumbers.add(poNumber);
+        knownRowKeys.add(visibleItem.rowKey);
         foundNew = true;
         foundCount += 1;
         sourceRow += 1;
         this.#manifestStore.ensureItem({
-          id: sanitizeFileName(poNumber),
-          poNumber,
+          id: buildManifestItemId(visibleItem.poNumber, visibleItem.rowKey),
+          poNumber: visibleItem.poNumber,
+          rowKey: visibleItem.rowKey,
           sourceRow,
         });
       }
@@ -86,7 +87,7 @@ export class ErpCollector {
   }
 
   async downloadDiscovered(): Promise<void> {
-    const pendingPoNumbers = new Set<string>();
+    const pendingItemIds = new Set<string>();
 
     for (const item of this.getOrderedItems()) {
       if (item.uploadStatus === "uploaded") {
@@ -108,7 +109,7 @@ export class ErpCollector {
         });
       }
 
-      pendingPoNumbers.add(item.poNumber);
+      pendingItemIds.add(item.id);
     }
 
     await this.#onManifestChanged();
@@ -116,29 +117,30 @@ export class ErpCollector {
       total: this.#manifestStore.items.length,
     });
 
-    if (pendingPoNumbers.size === 0) {
+    if (pendingItemIds.size === 0) {
       await this.#logger.info("erp", "Nenhum PDF pendente para baixar no ERP.");
       return;
     }
 
     await this.#logger.info("erp", "Iniciando o download dos PDFs descobertos no ERP.", {
-      pending: pendingPoNumbers.size,
+      pending: pendingItemIds.size,
       discovered: this.#manifestStore.items.length,
     });
 
     await this.scanErpGridUntilEnd(async (state) => {
       let processedAny = false;
 
-      for (const poNumber of state.visiblePoNumbers) {
-        if (!pendingPoNumbers.has(poNumber)) {
+      for (const visibleItem of state.visibleItems) {
+        const itemId = buildManifestItemId(visibleItem.poNumber, visibleItem.rowKey);
+        if (!pendingItemIds.has(itemId)) {
           continue;
         }
 
         processedAny = true;
-        pendingPoNumbers.delete(poNumber);
-        await this.processPurchaseOrder(poNumber);
+        pendingItemIds.delete(itemId);
+        await this.processPurchaseOrder(itemId);
 
-        if (pendingPoNumbers.size === 0) {
+        if (pendingItemIds.size === 0) {
           return { progress: true, stop: true };
         }
       }
@@ -146,10 +148,10 @@ export class ErpCollector {
       return { progress: processedAny };
     });
 
-    if (pendingPoNumbers.size > 0) {
+    if (pendingItemIds.size > 0) {
       const unresolvedError = "A OC nao foi reencontrada na grade do ERP durante a etapa de download.";
-      for (const poNumber of pendingPoNumbers) {
-        const item = this.#manifestStore.findById(sanitizeFileName(poNumber));
+      for (const itemId of pendingItemIds) {
+        const item = this.#manifestStore.findById(itemId);
         if (!item || item.uploadStatus === "uploaded") {
           continue;
         }
@@ -162,7 +164,7 @@ export class ErpCollector {
       }
       await this.#onManifestChanged();
       await this.#logger.error("erp", "Nem todas as OCs descobertas puderam ser reencontradas para download.", {
-        pending: pendingPoNumbers.size,
+        pending: pendingItemIds.size,
         discovered: this.#manifestStore.items.length,
       });
     }
@@ -170,12 +172,12 @@ export class ErpCollector {
     await this.#onCurrentItem(undefined);
   }
 
-  async processPurchaseOrder(poNumber: string): Promise<void> {
-    const itemId = sanitizeFileName(poNumber);
+  async processPurchaseOrder(itemId: string): Promise<void> {
     const item = this.#manifestStore.findById(itemId);
     if (!item) {
-      throw new Error(`Item do manifesto nao encontrado para ${poNumber}`);
+      throw new Error(`Item do manifesto nao encontrado para ${itemId}`);
     }
+    const poNumber = item.poNumber;
 
     if (await this.reuseExistingDownload(itemId)) {
       return;
@@ -196,7 +198,7 @@ export class ErpCollector {
     );
 
     try {
-      await this.#browserManager.openErpPurchaseOrder(poNumber);
+      await this.#browserManager.openErpPurchaseOrder(poNumber, item.rowKey);
       const { originalFileName } = await this.#browserManager.downloadErpAttachment(tempDownloadPath);
       await this.#browserManager.closeErpDialogs();
       await this.#browserManager.waitForErpGrid();

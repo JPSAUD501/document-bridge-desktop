@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import type { ManifestItem, StatusCounts } from "../types";
 
 export function sleep(ms: number): Promise<void> {
@@ -49,6 +49,13 @@ export function buildSavedPdfName(index: number, poNumber: string, originalName:
   const po = sanitizeFileName(poNumber) || "unknown-po";
   const prefix = `${index}`.padStart(4, "0");
   return ensureExtension(`${prefix}-${po}-${baseOriginal}`, ".pdf");
+}
+
+export function buildManifestItemId(poNumber: string, rowKey?: string): string {
+  const po = sanitizeFileName(poNumber) || "unknown-po";
+  const stableKey = (rowKey?.trim() || poNumber).normalize("NFKC");
+  const digest = createHash("sha1").update(stableKey).digest("hex").slice(0, 12);
+  return `${po}-${digest}`;
 }
 
 export async function ensureDir(target: string): Promise<void> {

@@ -1,7 +1,7 @@
 import { EventEmitter } from "node:events";
 import path from "node:path";
 import type { CliOptions, RuntimeSnapshot } from "../types";
-import { buildCounts, findWorkspaceRoot, sanitizeFileName, summarizeError } from "../lib/utils";
+import { buildCounts, buildManifestItemId, findWorkspaceRoot, sanitizeFileName, summarizeError } from "../lib/utils";
 import { resolveAuthStatePath, resolveRunPaths } from "./run-context";
 import { RunLogger } from "./logger";
 import { ManifestStore } from "./manifest-store";
@@ -304,7 +304,9 @@ export class AppController extends EventEmitter {
       return undefined;
     }
 
-    const item = this.#manifestStore.findById(sanitizeFileName(currentPoNumber));
+    const item =
+      this.#manifestStore.findById(sanitizeFileName(currentPoNumber)) ??
+      this.#manifestStore.findById(buildManifestItemId(currentPoNumber));
     if (!item) {
       return `${currentPoNumber}: ${message}`;
     }

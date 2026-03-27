@@ -10,6 +10,10 @@ interface BrowserManagerOptions {
 }
 
 export interface ErpGridState {
+  visibleItems: Array<{
+    poNumber: string;
+    rowKey: string;
+  }>;
   visiblePoNumbers: string[];
   visibleSignature: string;
   scrollTop: number;
@@ -107,21 +111,61 @@ export class BrowserManager {
   }
 
   async getVisiblePoNumbers(): Promise<string[]> {
+    return (await this.getVisibleErpItems()).map((item) => item.poNumber);
+  }
+
+  async getVisibleErpItems(): Promise<Array<{ poNumber: string; rowKey: string }>> {
     const rows = this.getVisibleErpRows();
     const count = await rows.count();
-    const poNumbers: string[] = [];
+    const items: Array<{ poNumber: string; rowKey: string }> = [];
 
     for (let index = 0; index < count; index += 1) {
-      const value = (await rows.nth(index).inputValue()).trim();
+      const row = rows.nth(index);
+      const value = (await row.inputValue()).trim();
       if (value) {
-        poNumbers.push(value);
+        const rowKey = await row.evaluate((input) => {
+          const normalize = (raw: string | null | undefined) => (raw ?? "").replace(/\s+/g, " ").trim();
+          const scoreElement = (node: HTMLElement, text: string) => {
+            const role = node.getAttribute("role")?.toLowerCase() ?? "";
+            const tag = node.tagName.toLowerCase();
+            const rect = node.getBoundingClientRect();
+            const hasRowSemantics = role === "row" || tag === "tr";
+            const rowSized = rect.height >= 20 && rect.height <= 90;
+            const children = node.children.length;
+            return (
+              (hasRowSemantics ? 10_000 : 0) +
+              (rowSized ? 2_000 : 0) +
+              Math.min(children, 20) * 25 +
+              Math.min(text.length, 500)
+            );
+          };
+
+          let bestText = normalize((input as HTMLInputElement).value || input.getAttribute("title"));
+          let bestScore = 0;
+          let current: HTMLElement | null = input as HTMLElement;
+
+          while (current) {
+            const text = normalize(current.innerText || current.textContent);
+            if (text) {
+              const score = scoreElement(current, text);
+              if (score > bestScore) {
+                bestText = text;
+                bestScore = score;
+              }
+            }
+            current = current.parentElement;
+          }
+
+          return bestText;
+        });
+        items.push({ poNumber: value, rowKey: rowKey || value });
       }
     }
 
-    return [...new Set(poNumbers)];
+    return items;
   }
 
-  async openErpPurchaseOrder(poNumber: string): Promise<void> {
+  async openErpPurchaseOrder(poNumber: string, rowKey?: string): Promise<void> {
     await this.erpPage.bringToFront().catch(() => undefined);
     const rows = this.getVisibleErpRows();
     const count = await rows.count();
@@ -130,6 +174,47 @@ export class BrowserManager {
       const row = rows.nth(index);
       if ((await row.inputValue()).trim() !== poNumber) {
         continue;
+      }
+
+      if (rowKey) {
+        const currentRowKey = await row.evaluate((input) => {
+          const normalize = (raw: string | null | undefined) => (raw ?? "").replace(/\s+/g, " ").trim();
+          const scoreElement = (node: HTMLElement, text: string) => {
+            const role = node.getAttribute("role")?.toLowerCase() ?? "";
+            const tag = node.tagName.toLowerCase();
+            const rect = node.getBoundingClientRect();
+            const hasRowSemantics = role === "row" || tag === "tr";
+            const rowSized = rect.height >= 20 && rect.height <= 90;
+            const children = node.children.length;
+            return (
+              (hasRowSemantics ? 10_000 : 0) +
+              (rowSized ? 2_000 : 0) +
+              Math.min(children, 20) * 25 +
+              Math.min(text.length, 500)
+            );
+          };
+
+          let bestText = normalize((input as HTMLInputElement).value || input.getAttribute("title"));
+          let bestScore = 0;
+          let current: HTMLElement | null = input as HTMLElement;
+
+          while (current) {
+            const text = normalize(current.innerText || current.textContent);
+            if (text) {
+              const score = scoreElement(current, text);
+              if (score > bestScore) {
+                bestText = text;
+                bestScore = score;
+              }
+            }
+            current = current.parentElement;
+          }
+
+          return bestText;
+        });
+        if (currentRowKey !== rowKey) {
+          continue;
+        }
       }
 
       await row.scrollIntoViewIfNeeded().catch(() => undefined);
@@ -542,14 +627,16 @@ export class BrowserManager {
   }
 
   async readErpGridState(): Promise<ErpGridState> {
-    const visiblePoNumbers = await this.getVisiblePoNumbers();
+    const visibleItems = await this.getVisibleErpItems();
+    const visiblePoNumbers = visibleItems.map((item) => item.poNumber);
     const rows = this.getVisibleErpRows();
     const count = await rows.count();
 
     if (count === 0) {
       return {
+        visibleItems,
         visiblePoNumbers,
-        visibleSignature: visiblePoNumbers.join("|"),
+        visibleSignature: visibleItems.map((item) => item.rowKey).join("|"),
         scrollTop: 0,
         scrollHeight: 0,
         clientHeight: 0,
@@ -597,8 +684,9 @@ export class BrowserManager {
     });
 
     return {
+      visibleItems,
       visiblePoNumbers,
-      visibleSignature: visiblePoNumbers.join("|"),
+      visibleSignature: visibleItems.map((item) => item.rowKey).join("|"),
       ...metrics,
     };
   }

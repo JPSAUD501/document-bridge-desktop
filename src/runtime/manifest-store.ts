@@ -7,6 +7,7 @@ import { fileExists, nowIso, writeFileAtomic } from "../lib/utils";
 const manifestItemSchema = z.object({
   id: z.string(),
   poNumber: z.string(),
+  rowKey: z.string().optional(),
   sourceRow: z.number(),
   originalFileName: z.string().optional(),
   savedFileName: z.string().optional(),
@@ -63,9 +64,12 @@ export class ManifestStore {
     return this.#data.items.find((item) => item.id === id);
   }
 
-  ensureItem(partial: Pick<ManifestItem, "id" | "poNumber" | "sourceRow">): ManifestItem {
+  ensureItem(partial: Pick<ManifestItem, "id" | "poNumber" | "sourceRow"> & Pick<ManifestItem, "rowKey">): ManifestItem {
     const existing = this.findById(partial.id);
     if (existing) {
+      if (!existing.rowKey && partial.rowKey) {
+        existing.rowKey = partial.rowKey;
+      }
       return existing;
     }
 
@@ -73,6 +77,7 @@ export class ManifestStore {
     const item: ManifestItem = {
       id: partial.id,
       poNumber: partial.poNumber,
+      rowKey: partial.rowKey,
       sourceRow: partial.sourceRow,
       downloadStatus: "pending",
       uploadStatus: "pending",

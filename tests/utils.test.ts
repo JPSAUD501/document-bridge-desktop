@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { buildCounts, buildSavedPdfName, chunk, normalizePdfFileName } from "../src/lib/utils";
+import { buildCounts, buildManifestItemId, buildSavedPdfName, chunk, normalizePdfFileName } from "../src/lib/utils";
 
 describe("utils", () => {
   test("chunks arrays into batches of 50", () => {
@@ -20,6 +20,12 @@ describe("utils", () => {
   test("forces pdf extension when the source name comes without it", () => {
     expect(normalizePdfFileName("395388 RENASCER")).toBe("395388 RENASCER.pdf");
     expect(buildSavedPdfName(3, "OC304631", "395388 RENASCER")).toBe("0003-oc304631-395388-renascer.pdf");
+  });
+
+  test("builds stable manifest ids for duplicate OCs with different row keys", () => {
+    expect(buildManifestItemId("HRV-008813", "5401|HRV-008813|2457539")).not.toBe(
+      buildManifestItemId("HRV-008813", "5401|HRV-008813|2885021"),
+    );
   });
 
   test("builds status counters from manifest items", () => {

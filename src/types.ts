@@ -26,6 +26,7 @@ export type LogLevel = "INFO" | "WARN" | "ERROR";
 export interface ManifestItem {
   id: string;
   poNumber: string;
+  rowKey?: string;
   sourceRow: number;
   originalFileName?: string;
   savedFileName?: string;

@@ -2,21 +2,27 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, test, vi } from "vitest";
-import { sanitizeFileName } from "../src/lib/utils";
+import { buildManifestItemId } from "../src/lib/utils";
 import type { BrowserManager, ErpGridAdvanceResult, ErpGridState } from "../src/runtime/browser-manager";
 import { ErpCollector } from "../src/runtime/erp-collector";
 import { ManifestStore } from "../src/runtime/manifest-store";
 import type { RunLogger } from "../src/runtime/logger";
 
 function buildGridState(
-  visiblePoNumbers: string[],
+  visiblePoNumbers: Array<string | { poNumber: string; rowKey?: string }>,
   scrollTop: number,
   scrollHeight = 2_000,
   clientHeight = 400,
 ): ErpGridState {
+  const visibleItems = visiblePoNumbers.map((value) =>
+    typeof value === "string"
+      ? { poNumber: value, rowKey: `${value}|row` }
+      : { poNumber: value.poNumber, rowKey: value.rowKey ?? `${value.poNumber}|row` },
+  );
   return {
-    visiblePoNumbers,
-    visibleSignature: visiblePoNumbers.join("|"),
+    visibleItems,
+    visiblePoNumbers: visibleItems.map((item) => item.poNumber),
+    visibleSignature: visibleItems.map((item) => item.rowKey).join("|"),
     scrollTop,
     scrollHeight,
     clientHeight,
@@ -93,7 +99,7 @@ async function createManifestStore(tempDir: string) {
 }
 
 describe("ErpCollector", () => {
-  test("discovers all unique OCs even when the first scroll attempt does not advance the virtualized grid", async () => {
+  test("discovers all unique ERP rows even when the first scroll attempt does not advance the virtualized grid", async () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "erp-discovery-"));
     tempDirs.push(tempDir);
 
@@ -139,7 +145,42 @@ describe("ErpCollector", () => {
     expect(browserManager.advanceErpGrid).toHaveBeenCalled();
     expect((browserManager.advanceErpGrid as unknown as { mock: { calls: unknown[] } }).mock.calls.length).toBeGreaterThanOrEqual(4);
     expect(manifestStore.items).toHaveLength(12);
-    expect(new Set(manifestStore.items.map((item) => item.poNumber)).size).toBe(12);
+    expect(new Set(manifestStore.items.map((item) => item.id)).size).toBe(12);
+  });
+
+  test("keeps duplicate OCs when the row key is different", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "erp-duplicates-"));
+    tempDirs.push(tempDir);
+
+    const manifestStore = await createManifestStore(tempDir);
+    const initialState = buildGridState(
+      [
+        { poNumber: "HRV-008813", rowKey: "5401|HRV-008813|2457539|RD GESTAO" },
+        { poNumber: "HRV-008813", rowKey: "5401|HRV-008813|2885021|RD GESTAO" },
+        { poNumber: "OC0292131", rowKey: "2102|OC0292131|360682|TOP SERVICE" },
+      ],
+      0,
+    );
+    const browserManager = buildBrowserManagerMock(initialState, [
+      buildAdvanceResult(initialState, { advanced: false, reachedEnd: true }),
+      buildAdvanceResult(initialState, { advanced: false, reachedEnd: true }),
+      buildAdvanceResult(initialState, { advanced: false, reachedEnd: true }),
+    ]);
+    const logger = buildLoggerMock();
+
+    const collector = new ErpCollector({
+      browserManager,
+      downloadsDir: path.join(tempDir, "downloads"),
+      manifestStore,
+      logger,
+      onCurrentItem: async () => undefined,
+      onManifestChanged: async () => undefined,
+    });
+
+    await collector.discover();
+
+    expect(manifestStore.items).toHaveLength(3);
+    expect(manifestStore.items.filter((item) => item.poNumber === "HRV-008813")).toHaveLength(2);
   });
 
   test("downloads every discovered OC by reusing the same end-confirmed grid sweep", async () => {
@@ -152,8 +193,9 @@ describe("ErpCollector", () => {
     for (let index = 1; index <= 12; index += 1) {
       const poNumber = `OC${String(index).padStart(4, "0")}`;
       manifestStore.ensureItem({
-        id: sanitizeFileName(poNumber),
+        id: buildManifestItemId(poNumber, `${poNumber}|row`),
         poNumber,
+        rowKey: `${poNumber}|row`,
         sourceRow: index,
       });
     }
