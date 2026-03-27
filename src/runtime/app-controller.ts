@@ -1,7 +1,7 @@
 import { EventEmitter } from "node:events";
 import path from "node:path";
 import type { CliOptions, RuntimeSnapshot } from "../types";
-import { buildCounts, findWorkspaceRoot, summarizeError } from "../lib/utils";
+import { buildCounts, findWorkspaceRoot, sanitizeFileName, summarizeError } from "../lib/utils";
 import { resolveAuthStatePath, resolveRunPaths } from "./run-context";
 import { RunLogger } from "./logger";
 import { ManifestStore } from "./manifest-store";
@@ -209,10 +209,11 @@ export class AppController extends EventEmitter {
       await logger.info("system", "Execucao concluida.");
     } catch (error) {
       const message = summarizeError(error);
+      const itemErrorMessage = await this.attachExecutionErrorToCurrentItem(message);
       await logger.error("system", "Execucao interrompida por erro.", { error: message });
       this.setSnapshot({
         phase: "error",
-        errors: [...this.#snapshot.errors, message].slice(-10),
+        errors: [...this.#snapshot.errors, itemErrorMessage ?? message].slice(-10),
       });
     } finally {
       this.#executionInFlight = false;
@@ -295,6 +296,39 @@ export class AppController extends EventEmitter {
       phase: this.#snapshot.phase,
       runDir: this.#snapshot.runDir,
     });
+  }
+
+  async attachExecutionErrorToCurrentItem(message: string): Promise<string | undefined> {
+    const currentPoNumber = this.#snapshot.currentItem?.trim();
+    if (!currentPoNumber || !this.#manifestStore) {
+      return undefined;
+    }
+
+    const item = this.#manifestStore.findById(sanitizeFileName(currentPoNumber));
+    if (!item) {
+      return `${currentPoNumber}: ${message}`;
+    }
+
+    if (this.#snapshot.phase === "uploading") {
+      await this.#manifestStore.updateItem(item.id, {
+        uploadStatus: "upload_failed",
+        lastError: message,
+      });
+      await this.refreshSnapshot();
+      return `${item.poNumber}: ${message}`;
+    }
+
+    if (this.#snapshot.phase === "downloading" || this.#snapshot.phase === "discovering") {
+      await this.#manifestStore.updateItem(item.id, {
+        downloadStatus: "download_failed",
+        uploadStatus: item.uploadStatus === "uploaded" ? "uploaded" : "pending",
+        lastError: message,
+      });
+      await this.refreshSnapshot();
+      return `${item.poNumber}: ${message}`;
+    }
+
+    return `${item.poNumber}: ${message}`;
   }
 
   setSnapshot(partial: Partial<RuntimeSnapshot>): void {
