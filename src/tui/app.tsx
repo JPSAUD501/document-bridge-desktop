@@ -152,7 +152,6 @@ function renderScreen(snapshot: RuntimeSnapshot): string {
         `Pasta dos PDFs: ${snapshot.downloadsDir ? truncateMiddle(snapshot.downloadsDir, width - 22) : "-"}`,
         `Navegador: ${snapshot.browserReady ? paint("Pronto", GREEN) : paint("Ainda abrindo", YELLOW)}`,
         `Planilha Excel: ${translateExcelStatus(snapshot.excelStatus)}`,
-        `OCs visiveis no ERP: ${snapshot.visibleOcCount ?? "-"}${snapshot.visibleOcCountIsPreview ? " (janela atual)" : ""}`,
         `OCs encontradas: ${snapshot.discoveredOcCount != null ? String(snapshot.discoveredOcCount) : "-"}`,
         `Nota atual: ${snapshot.currentItem ?? "-"}`,
         `Lote atual: ${snapshot.currentBatch ?? "-"}`,
@@ -206,9 +205,7 @@ function guidanceFor(snapshot: RuntimeSnapshot): string {
   }
 
   if (snapshot.phase === "ready" && snapshot.waitingForStart) {
-    return snapshot.visibleOcCount != null
-      ? `Ambiente pronto. O ERP mostra ${snapshot.visibleOcCount} OCs visiveis na janela atual. Pressione Enter para comecar a automacao.`
-      : "Ambiente pronto. Pressione Enter para comecar a automacao.";
+    return "Ambiente pronto. Pressione Enter para comecar a automacao.";
   }
 
   if (snapshot.phase === "preflight") {
@@ -242,8 +239,7 @@ function nextActionsFor(snapshot: RuntimeSnapshot): string[] {
       "Confira ERP e Midas e pressione Enter.",
       "1. Entre no ERP.",
       "2. Aplique o filtro para mostrar so as notas desejadas.",
-      "3. Confira a previa de OCs visiveis no status atual.",
-      "4. Entre na Midas e deixe a tela de upload aberta.",
+      "3. Entre na Midas e deixe a tela de upload aberta.",
     ];
   }
 

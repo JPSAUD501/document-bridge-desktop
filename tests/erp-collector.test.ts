@@ -36,12 +36,16 @@ function buildAdvanceResult(
 
 function buildBrowserManagerMock(initialState: ErpGridState, advanceResults: ErpGridAdvanceResult[]) {
   let advanceIndex = 0;
+  let currentState = initialState;
 
   return {
     waitForErpGrid: vi.fn().mockResolvedValue(undefined),
     inspectVisiblePoNumbers: vi.fn().mockResolvedValue(initialState.visiblePoNumbers),
-    getErpGridState: vi.fn().mockResolvedValue(initialState),
-    resetErpGridToTop: vi.fn().mockResolvedValue(initialState),
+    getErpGridState: vi.fn().mockImplementation(async () => currentState),
+    resetErpGridToTop: vi.fn().mockImplementation(async () => {
+      currentState = initialState;
+      return currentState;
+    }),
     advanceErpGrid: vi.fn().mockImplementation(async () => {
       const fallback = advanceResults[Math.max(advanceResults.length - 1, 0)];
       const result = advanceResults[advanceIndex] ?? fallback;
@@ -49,6 +53,7 @@ function buildBrowserManagerMock(initialState: ErpGridState, advanceResults: Erp
         throw new Error("Nenhum resultado de avanço do grid foi configurado no teste.");
       }
       advanceIndex += 1;
+      currentState = result.state;
       return result;
     }),
     scrollErpGrid: vi.fn().mockResolvedValue(undefined),
@@ -132,7 +137,7 @@ describe("ErpCollector", () => {
 
     expect(browserManager.resetErpGridToTop).toHaveBeenCalledTimes(1);
     expect(browserManager.advanceErpGrid).toHaveBeenCalled();
-    expect(browserManager.advanceErpGrid.mock.calls.length).toBeGreaterThanOrEqual(4);
+    expect((browserManager.advanceErpGrid as unknown as { mock: { calls: unknown[] } }).mock.calls.length).toBeGreaterThanOrEqual(4);
     expect(manifestStore.items).toHaveLength(12);
     expect(new Set(manifestStore.items.map((item) => item.poNumber)).size).toBe(12);
   });

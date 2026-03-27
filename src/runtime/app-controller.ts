@@ -423,9 +423,7 @@ function buildRunStatusMessage(snapshot: RuntimeSnapshot, canRetry: boolean): st
   }
 
   if (snapshot.phase === "ready" && snapshot.waitingForStart) {
-    return snapshot.visibleOcCount != null
-      ? `ERP e Midas devem estar prontos. Previa atual: ${snapshot.visibleOcCount} OCs visiveis na janela atual do ERP. Ao iniciar, voce vai escolher a pasta raiz onde as runs serao salvas.`
-      : "ERP e Midas devem estar prontos. Ao iniciar, voce vai escolher a pasta raiz onde as runs serao salvas.";
+    return "ERP e Midas devem estar prontos. Ao iniciar, voce vai escolher a pasta raiz onde as runs serao salvas.";
   }
 
   if (snapshot.phase === "discovering") {

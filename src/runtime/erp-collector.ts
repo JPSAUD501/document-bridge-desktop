@@ -249,7 +249,14 @@ export class ErpCollector {
         return;
       }
 
-      const advanceResult = await this.#browserManager.advanceErpGrid(state);
+      const currentState = await this.#browserManager.getErpGridState();
+      if (currentState.visibleSignature !== state.visibleSignature) {
+        state = currentState;
+        endConfirmationAttempts = 0;
+        continue;
+      }
+
+      const advanceResult = await this.#browserManager.advanceErpGrid(currentState);
 
       if (advanceResult.advanced) {
         endConfirmationAttempts = 0;

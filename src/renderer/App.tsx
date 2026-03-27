@@ -567,13 +567,6 @@ function MetricsSection({ snapshot }: { snapshot: RuntimeSnapshot }): ReactEleme
 
   const metrics: MetricDef[] = [
     {
-      label: "OCs visiveis",
-      value: snapshot.visibleOcCount ?? 0,
-      tone: "dark",
-      icon: <Globe size={16} />,
-      subtitle: snapshot.visibleOcCount != null ? "Janela visivel" : "Sem leitura",
-    },
-    {
       label: "Total encontrado",
       value: snapshot.discoveredOcCount ?? 0,
       tone: snapshot.isDiscoveryComplete ? "green" : "blue",
@@ -713,7 +706,6 @@ function OperationPanel({ snapshot }: { snapshot: RuntimeSnapshot }): ReactEleme
       <div className="steps-guide">
         <div className="steps-guide__title">Resumo do ERP</div>
         <ol className="steps-guide__list">
-          <li>OCs visiveis agora: {snapshot.visibleOcCount ?? 0} {snapshot.visibleOcCountIsPreview ? "(janela atual, nao e o total filtrado)" : ""}</li>
           <li>OCs encontradas na varredura: {discoveredLabel}</li>
         </ol>
       </div>

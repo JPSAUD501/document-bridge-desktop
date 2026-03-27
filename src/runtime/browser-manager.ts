@@ -242,18 +242,38 @@ export class BrowserManager {
       await lastRow.click({ timeout: APP_TIMEOUTS.medium }).catch(() => undefined);
       await lastRow
         .evaluate((input) => {
-          let node: HTMLElement | null = input as HTMLElement;
-          while (node) {
-            if (node.scrollHeight > node.clientHeight + 20) {
-              const delta = Math.max(node.clientHeight * 0.9, 600);
-              node.scrollTo({
-                top: Math.min(node.scrollTop + delta, node.scrollHeight),
-                behavior: "auto",
-              });
-              return;
+          const resolveScrollableMetrics = (start: HTMLElement) => {
+            const candidates: HTMLElement[] = [];
+            let node: HTMLElement | null = start;
+            while (node) {
+              const style = window.getComputedStyle(node);
+              const overflowY = style.overflowY.toLowerCase();
+              const canScroll =
+                node.scrollHeight > node.clientHeight + 8 &&
+                (overflowY.includes("auto") || overflowY.includes("scroll") || overflowY.includes("overlay"));
+              if (canScroll) {
+                candidates.push(node);
+              }
+              node = node.parentElement;
             }
-            node = node.parentElement;
+
+            if (candidates.length > 0) {
+              return candidates.sort((left, right) => right.scrollHeight - left.scrollHeight)[0] ?? null;
+            }
+
+            return null;
+          };
+
+          const container = resolveScrollableMetrics(input as HTMLElement);
+          if (container) {
+            const delta = Math.max(container.clientHeight * 0.9, 600);
+            container.scrollTo({
+              top: Math.min(container.scrollTop + delta, container.scrollHeight),
+              behavior: "auto",
+            });
+            return;
           }
+
           window.scrollBy({ top: 900, behavior: "auto" });
         })
         .catch(() => undefined);
@@ -277,14 +297,34 @@ export class BrowserManager {
     await firstRow.click({ timeout: APP_TIMEOUTS.medium }).catch(() => undefined);
     await firstRow
       .evaluate((input) => {
-        let node: HTMLElement | null = input as HTMLElement;
-        while (node) {
-          if (node.scrollHeight > node.clientHeight + 20) {
-            node.scrollTo({ top: 0, behavior: "auto" });
-            return;
+        const resolveScrollableMetrics = (start: HTMLElement) => {
+          const candidates: HTMLElement[] = [];
+          let node: HTMLElement | null = start;
+          while (node) {
+            const style = window.getComputedStyle(node);
+            const overflowY = style.overflowY.toLowerCase();
+            const canScroll =
+              node.scrollHeight > node.clientHeight + 8 &&
+              (overflowY.includes("auto") || overflowY.includes("scroll") || overflowY.includes("overlay"));
+            if (canScroll) {
+              candidates.push(node);
+            }
+            node = node.parentElement;
           }
-          node = node.parentElement;
+
+          if (candidates.length > 0) {
+            return candidates.sort((left, right) => right.scrollHeight - left.scrollHeight)[0] ?? null;
+          }
+
+          return null;
+        };
+
+        const container = resolveScrollableMetrics(input as HTMLElement);
+        if (container) {
+          container.scrollTo({ top: 0, behavior: "auto" });
+          return;
         }
+
         window.scrollTo({ top: 0, behavior: "auto" });
       })
       .catch(() => undefined);
@@ -517,7 +557,8 @@ export class BrowserManager {
     }
 
     const metrics = await rows.first().evaluate((input) => {
-      const findScrollableAncestor = (start: HTMLElement | null) => {
+      const resolveScrollableMetrics = (start: HTMLElement | null) => {
+        const candidates: HTMLElement[] = [];
         let node = start;
         while (node) {
           const style = window.getComputedStyle(node);
@@ -526,15 +567,19 @@ export class BrowserManager {
             node.scrollHeight > node.clientHeight + 8 &&
             (overflowY.includes("auto") || overflowY.includes("scroll") || overflowY.includes("overlay"));
           if (canScroll) {
-            return node;
+            candidates.push(node);
           }
           node = node.parentElement;
+        }
+
+        if (candidates.length > 0) {
+          return candidates.sort((left, right) => right.scrollHeight - left.scrollHeight)[0] ?? null;
         }
 
         return null;
       };
 
-      const container = findScrollableAncestor(input as HTMLElement);
+      const container = resolveScrollableMetrics(input as HTMLElement);
       if (container) {
         return {
           scrollTop: container.scrollTop,
