@@ -314,7 +314,7 @@ export function App(): ReactElement {
           <OperationPanel snapshot={snapshot} />
           <div className="content-grid__right">
             <ItemsPanel items={recentItems} total={snapshot.totalItems} />
-            <ErrorsPanel errors={snapshot.errors} />
+            <ErrorsPanel errors={snapshot.errors} items={snapshot.manifestItems} />
           </div>
         </motion.div>
 
@@ -805,8 +805,13 @@ function ItemStatusTag({ item }: { item: ManifestItem }): ReactElement {
    ERRORS PANEL
    ============================================================ */
 
-function ErrorsPanel({ errors }: { errors: string[] }): ReactElement {
+function ErrorsPanel({ errors, items }: { errors: string[]; items: ManifestItem[] }): ReactElement {
+  const failedItems = items
+    .filter((item) => item.downloadStatus === "download_failed" || item.uploadStatus === "upload_failed")
+    .slice(-5)
+    .reverse();
   const recent = errors.slice(-5).reverse();
+  const visibleCount = failedItems.length > 0 ? failedItems.length : recent.length;
 
   return (
     <div className="panel">
@@ -815,16 +820,16 @@ function ErrorsPanel({ errors }: { errors: string[] }): ReactElement {
           <div className="panel__kicker">Falhas</div>
           <h2 className="panel__title">Pontos de atenção</h2>
         </div>
-        {errors.length > 0 && (
+        {visibleCount > 0 && (
           <div className="panel__header-right">
             <motion.span
               className="count-badge count-badge--danger"
-              key={errors.length}
+              key={visibleCount}
               initial={{ scale: 1.35, opacity: 0 }}
               animate={{ scale: 1, opacity: 1 }}
               transition={{ duration: 0.25, ease: "easeOut" }}
             >
-              {errors.length}
+              {visibleCount}
             </motion.span>
           </div>
         )}
@@ -832,7 +837,23 @@ function ErrorsPanel({ errors }: { errors: string[] }): ReactElement {
 
       <div className="errors-section">
         <AnimatePresence initial={false}>
-          {recent.length > 0 ? (
+          {failedItems.length > 0 ? (
+            <ul className="error-list">
+              {failedItems.map((item, i) => (
+                <motion.li
+                  key={`${item.id}-${item.lastError ?? item.updatedAt}`}
+                  className="error-item"
+                  initial={{ opacity: 0, x: -8, height: 0 }}
+                  animate={{ opacity: 1, x: 0, height: "auto" }}
+                  exit={{ opacity: 0, x: 8, height: 0 }}
+                  transition={{ delay: i * 0.04, duration: 0.25 }}
+                >
+                  <AlertTriangle size={13} className="error-item__icon" />
+                  <span>{`${item.poNumber}: ${item.lastError ?? summarizeManifestItem(item)}`}</span>
+                </motion.li>
+              ))}
+            </ul>
+          ) : recent.length > 0 ? (
             <ul className="error-list">
               {recent.map((err, i) => (
                 <motion.li
