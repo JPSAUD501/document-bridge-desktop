@@ -250,7 +250,9 @@ export class BrowserManager {
 
     let latest = baseline;
     for (let attempt = 1; attempt <= ERP_GRID_SCROLL_RETRIES; attempt += 1) {
-      latest = await this.ensureErpGridSelection(latest, { preferLastVisible: true });
+      latest = await this.ensureErpGridSelection(latest, {
+        preferredRowKey: latest.selectedItem?.rowKey,
+      });
       await this.performErpGridFallbackAdvanceAttempt();
       latest = await this.waitForErpGridStabilized();
 
@@ -297,9 +299,23 @@ export class BrowserManager {
     await this.erpPage.bringToFront().catch(() => undefined);
     const rows = this.getVisibleErpRows();
     if ((await rows.count()) > 0) {
-      const lastRow = rows.last();
-      await lastRow.click({ timeout: APP_TIMEOUTS.medium }).catch(() => undefined);
-      await lastRow
+      const currentState = await this.getErpGridState().catch(() => undefined);
+      let anchorRow = rows.first();
+
+      if (currentState?.selectedItem?.rowKey) {
+        const count = await rows.count();
+        for (let index = 0; index < count; index += 1) {
+          const candidate = rows.nth(index);
+          const snapshot = await this.readErpRowSnapshot(candidate);
+          if (snapshot?.rowKey === currentState.selectedItem.rowKey) {
+            anchorRow = candidate;
+            break;
+          }
+        }
+      }
+
+      await anchorRow.click({ timeout: APP_TIMEOUTS.medium }).catch(() => undefined);
+      await anchorRow
         .evaluate((input) => {
           const resolveScrollableMetrics = (start: HTMLElement) => {
             const candidates: HTMLElement[] = [];
