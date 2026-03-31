@@ -1,5 +1,5 @@
 import fs from "node:fs/promises";
-import { chromium, type Browser, type BrowserContext, type Page } from "playwright";
+import { chromium, type Browser, type BrowserContext, type Locator, type Page } from "playwright";
 import { registry } from "playwright-core/lib/server/registry/index";
 import { APP_TIMEOUTS, ERP_SELECTORS, ERP_URL, MIDAS_SELECTORS, MIDAS_URL } from "../config";
 import { normalizePdfFileName } from "../lib/utils";
@@ -14,6 +14,11 @@ export interface ErpGridState {
     poNumber: string;
     rowKey: string;
   }>;
+  selectedItem?: {
+    poNumber: string;
+    rowKey: string;
+  };
+  selectedSignature?: string;
   visiblePoNumbers: string[];
   visibleSignature: string;
   scrollTop: number;
@@ -24,12 +29,15 @@ export interface ErpGridState {
 export interface ErpGridAdvanceResult {
   state: ErpGridState;
   advanced: boolean;
+  selectionAdvanced: boolean;
+  usedFallback: boolean;
   reachedEnd: boolean;
 }
 
 const ERP_GRID_STABLE_SAMPLES = 3;
 const ERP_GRID_SAMPLE_INTERVAL_MS = 200;
 const ERP_GRID_SETTLE_TIMEOUT_MS = 3_000;
+const ERP_GRID_SELECTION_RETRIES = 2;
 const ERP_GRID_SCROLL_RETRIES = 3;
 const ERP_GRID_END_TOLERANCE_PX = 12;
 
@@ -121,44 +129,9 @@ export class BrowserManager {
 
     for (let index = 0; index < count; index += 1) {
       const row = rows.nth(index);
-      const value = (await row.inputValue()).trim();
-      if (value) {
-        const rowKey = await row.evaluate((input) => {
-          const normalize = (raw: string | null | undefined) => (raw ?? "").replace(/\s+/g, " ").trim();
-          const scoreElement = (node: HTMLElement, text: string) => {
-            const role = node.getAttribute("role")?.toLowerCase() ?? "";
-            const tag = node.tagName.toLowerCase();
-            const rect = node.getBoundingClientRect();
-            const hasRowSemantics = role === "row" || tag === "tr";
-            const rowSized = rect.height >= 20 && rect.height <= 90;
-            const children = node.children.length;
-            return (
-              (hasRowSemantics ? 10_000 : 0) +
-              (rowSized ? 2_000 : 0) +
-              Math.min(children, 20) * 25 +
-              Math.min(text.length, 500)
-            );
-          };
-
-          let bestText = normalize((input as HTMLInputElement).value || input.getAttribute("title"));
-          let bestScore = 0;
-          let current: HTMLElement | null = input as HTMLElement;
-
-          while (current) {
-            const text = normalize(current.innerText || current.textContent);
-            if (text) {
-              const score = scoreElement(current, text);
-              if (score > bestScore) {
-                bestText = text;
-                bestScore = score;
-              }
-            }
-            current = current.parentElement;
-          }
-
-          return bestText;
-        });
-        items.push({ poNumber: value, rowKey: rowKey || value });
+      const snapshot = await this.readErpRowSnapshot(row);
+      if (snapshot) {
+        items.push({ poNumber: snapshot.poNumber, rowKey: snapshot.rowKey });
       }
     }
 
@@ -177,42 +150,8 @@ export class BrowserManager {
       }
 
       if (rowKey) {
-        const currentRowKey = await row.evaluate((input) => {
-          const normalize = (raw: string | null | undefined) => (raw ?? "").replace(/\s+/g, " ").trim();
-          const scoreElement = (node: HTMLElement, text: string) => {
-            const role = node.getAttribute("role")?.toLowerCase() ?? "";
-            const tag = node.tagName.toLowerCase();
-            const rect = node.getBoundingClientRect();
-            const hasRowSemantics = role === "row" || tag === "tr";
-            const rowSized = rect.height >= 20 && rect.height <= 90;
-            const children = node.children.length;
-            return (
-              (hasRowSemantics ? 10_000 : 0) +
-              (rowSized ? 2_000 : 0) +
-              Math.min(children, 20) * 25 +
-              Math.min(text.length, 500)
-            );
-          };
-
-          let bestText = normalize((input as HTMLInputElement).value || input.getAttribute("title"));
-          let bestScore = 0;
-          let current: HTMLElement | null = input as HTMLElement;
-
-          while (current) {
-            const text = normalize(current.innerText || current.textContent);
-            if (text) {
-              const score = scoreElement(current, text);
-              if (score > bestScore) {
-                bestText = text;
-                bestScore = score;
-              }
-            }
-            current = current.parentElement;
-          }
-
-          return bestText;
-        });
-        if (currentRowKey !== rowKey) {
+        const snapshot = await this.readErpRowSnapshot(row);
+        if (!snapshot || snapshot.rowKey !== rowKey) {
           continue;
         }
       }
@@ -291,26 +230,61 @@ export class BrowserManager {
 
   async advanceErpGrid(previousState?: ErpGridState): Promise<ErpGridAdvanceResult> {
     await this.erpPage.bringToFront().catch(() => undefined);
-    let baseline = previousState ?? (await this.getErpGridState());
-    let latest = baseline;
+    let baseline = await this.ensureErpGridSelection(previousState ?? (await this.getErpGridState()));
 
-    for (let attempt = 1; attempt <= ERP_GRID_SCROLL_RETRIES; attempt += 1) {
-      await this.performErpGridAdvanceAttempt();
-      latest = await this.waitForErpGridStabilized();
-      if (didErpGridAdvance(baseline, latest)) {
+    for (let attempt = 1; attempt <= ERP_GRID_SELECTION_RETRIES; attempt += 1) {
+      const selectionAdvance = await this.tryAdvanceErpGridSelection(baseline);
+      if (selectionAdvance.advanced) {
         return {
-          state: latest,
+          state: selectionAdvance.state,
           advanced: true,
-          reachedEnd: isErpGridAtEnd(latest),
+          selectionAdvanced: selectionAdvance.selectionAdvanced,
+          usedFallback: false,
+          reachedEnd: isErpGridAtEnd(selectionAdvance.state),
+        };
+      }
+      baseline = selectionAdvance.state;
+    }
+
+    await this.#onStatus?.("A selecao da grade do ERP travou; aplicando fallback de scroll.");
+
+    let latest = baseline;
+    for (let attempt = 1; attempt <= ERP_GRID_SCROLL_RETRIES; attempt += 1) {
+      latest = await this.ensureErpGridSelection(latest, { preferLastVisible: true });
+      await this.performErpGridFallbackAdvanceAttempt();
+      latest = await this.waitForErpGridStabilized();
+
+      if (!didErpGridAdvance(baseline, latest)) {
+        baseline = latest;
+        continue;
+      }
+
+      const resumedState = await this.ensureErpGridSelection(latest);
+      const resumedAdvance = await this.tryAdvanceErpGridSelection(resumedState);
+      if (resumedAdvance.advanced) {
+        return {
+          state: resumedAdvance.state,
+          advanced: true,
+          selectionAdvanced: true,
+          usedFallback: true,
+          reachedEnd: isErpGridAtEnd(resumedAdvance.state),
         };
       }
 
-      baseline = latest;
+      return {
+        state: resumedAdvance.state,
+        advanced: true,
+        selectionAdvanced: false,
+        usedFallback: true,
+        reachedEnd: isErpGridAtEnd(resumedAdvance.state),
+      };
     }
 
     return {
       state: latest,
       advanced: false,
+      selectionAdvanced: false,
+      usedFallback: true,
       reachedEnd: isErpGridAtEnd(latest),
     };
   }
@@ -319,7 +293,7 @@ export class BrowserManager {
     await this.advanceErpGrid().catch(() => undefined);
   }
 
-  async performErpGridAdvanceAttempt(): Promise<void> {
+  async performErpGridFallbackAdvanceAttempt(): Promise<void> {
     await this.erpPage.bringToFront().catch(() => undefined);
     const rows = this.getVisibleErpRows();
     if ((await rows.count()) > 0) {
@@ -417,7 +391,7 @@ export class BrowserManager {
     await sleep(APP_TIMEOUTS.keyboardSettle);
     await this.erpPage.keyboard.press("Control+Home").catch(() => undefined);
     await sleep(APP_TIMEOUTS.gridSettle + 250);
-    return this.waitForErpGridStabilized();
+    return this.ensureErpGridSelection(await this.waitForErpGridStabilized(), { preferFirstVisible: true });
   }
 
   async getMidasSupportsMultiple(): Promise<boolean> {
@@ -627,20 +601,36 @@ export class BrowserManager {
   }
 
   async readErpGridState(): Promise<ErpGridState> {
-    const visibleItems = await this.getVisibleErpItems();
-    const visiblePoNumbers = visibleItems.map((item) => item.poNumber);
     const rows = this.getVisibleErpRows();
     const count = await rows.count();
+    const visibleItems: Array<{ poNumber: string; rowKey: string }> = [];
+    let selectedItem: ErpGridState["selectedItem"];
+    const visiblePoNumbers: string[] = [];
 
     if (count === 0) {
       return {
         visibleItems,
+        selectedItem,
+        selectedSignature: undefined,
         visiblePoNumbers,
         visibleSignature: visibleItems.map((item) => item.rowKey).join("|"),
         scrollTop: 0,
         scrollHeight: 0,
         clientHeight: 0,
       };
+    }
+
+    for (let index = 0; index < count; index += 1) {
+      const snapshot = await this.readErpRowSnapshot(rows.nth(index));
+      if (!snapshot) {
+        continue;
+      }
+
+      visibleItems.push({ poNumber: snapshot.poNumber, rowKey: snapshot.rowKey });
+      visiblePoNumbers.push(snapshot.poNumber);
+      if (snapshot.isSelected && !selectedItem) {
+        selectedItem = { poNumber: snapshot.poNumber, rowKey: snapshot.rowKey };
+      }
     }
 
     const metrics = await rows.first().evaluate((input) => {
@@ -685,9 +675,127 @@ export class BrowserManager {
 
     return {
       visibleItems,
+      selectedItem,
+      selectedSignature: selectedItem?.rowKey,
       visiblePoNumbers,
       visibleSignature: visibleItems.map((item) => item.rowKey).join("|"),
       ...metrics,
+    };
+  }
+
+  async readErpRowSnapshot(
+    row: Locator,
+  ): Promise<{ poNumber: string; rowKey: string; isSelected: boolean } | undefined> {
+    return row.evaluate((input) => {
+      const normalize = (raw: string | null | undefined) => (raw ?? "").replace(/\s+/g, " ").trim();
+      const scoreElement = (node: HTMLElement, text: string) => {
+        const role = node.getAttribute("role")?.toLowerCase() ?? "";
+        const tag = node.tagName.toLowerCase();
+        const rect = node.getBoundingClientRect();
+        const hasRowSemantics = role === "row" || tag === "tr";
+        const rowSized = rect.height >= 20 && rect.height <= 90;
+        const children = node.children.length;
+        return (
+          (hasRowSemantics ? 10_000 : 0) +
+          (rowSized ? 2_000 : 0) +
+          Math.min(children, 20) * 25 +
+          Math.min(text.length, 500)
+        );
+      };
+      const matchesSelectedClass = (node: HTMLElement) => {
+        const className = typeof node.className === "string" ? node.className : "";
+        return /\b(selected|active|current|focused)\b/i.test(className);
+      };
+
+      const poNumber = normalize((input as HTMLInputElement).value || input.getAttribute("title"));
+      if (!poNumber) {
+        return undefined;
+      }
+
+      let bestText = poNumber;
+      let bestScore = 0;
+      let current: HTMLElement | null = input as HTMLElement;
+      let isSelected = false;
+      const activeElement = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+
+      while (current) {
+        const text = normalize(current.innerText || current.textContent);
+        if (text) {
+          const score = scoreElement(current, text);
+          if (score > bestScore) {
+            bestText = text;
+            bestScore = score;
+          }
+        }
+
+        if (
+          current.getAttribute("aria-selected") === "true" ||
+          current.getAttribute("data-dyn-selected") === "true" ||
+          matchesSelectedClass(current) ||
+          (activeElement !== null && (activeElement === current || current.contains(activeElement)))
+        ) {
+          isSelected = true;
+        }
+
+        current = current.parentElement;
+      }
+
+      return {
+        poNumber,
+        rowKey: bestText || poNumber,
+        isSelected,
+      };
+    });
+  }
+
+  async ensureErpGridSelection(
+    state?: ErpGridState,
+    options: { preferredRowKey?: string; preferFirstVisible?: boolean; preferLastVisible?: boolean } = {},
+  ): Promise<ErpGridState> {
+    let currentState = state ?? (await this.getErpGridState());
+    if (currentState.selectedItem) {
+      return currentState;
+    }
+
+    const rows = this.getVisibleErpRows();
+    const count = await rows.count();
+    if (count === 0) {
+      return currentState;
+    }
+
+    let targetIndex = options.preferLastVisible ? count - 1 : 0;
+
+    if (options.preferredRowKey) {
+      for (let index = 0; index < count; index += 1) {
+        const snapshot = await this.readErpRowSnapshot(rows.nth(index));
+        if (snapshot?.rowKey === options.preferredRowKey) {
+          targetIndex = index;
+          break;
+        }
+      }
+    }
+
+    await rows.nth(targetIndex).click({ timeout: APP_TIMEOUTS.medium }).catch(() => undefined);
+    currentState = await this.waitForErpGridStabilized();
+    return currentState;
+  }
+
+  async tryAdvanceErpGridSelection(
+    baseline: ErpGridState,
+  ): Promise<{ state: ErpGridState; advanced: boolean; selectionAdvanced: boolean }> {
+    const preparedBaseline = await this.ensureErpGridSelection(baseline, {
+      preferredRowKey: baseline.selectedItem?.rowKey,
+    });
+
+    await this.pressErpKey("ArrowDown").catch(() => undefined);
+    const latest = await this.waitForErpGridStabilized();
+    return {
+      state: latest,
+      advanced: didErpGridAdvance(preparedBaseline, latest),
+      selectionAdvanced:
+        Boolean(preparedBaseline.selectedSignature) &&
+        Boolean(latest.selectedSignature) &&
+        preparedBaseline.selectedSignature !== latest.selectedSignature,
     };
   }
 }
@@ -818,6 +926,7 @@ function sleep(durationMs: number): Promise<void> {
 
 function didErpGridAdvance(previousState: ErpGridState, nextState: ErpGridState): boolean {
   return (
+    nextState.selectedSignature !== previousState.selectedSignature ||
     nextState.visibleSignature !== previousState.visibleSignature ||
     nextState.scrollTop > previousState.scrollTop + 1 ||
     nextState.scrollHeight > previousState.scrollHeight + 1
@@ -826,6 +935,7 @@ function didErpGridAdvance(previousState: ErpGridState, nextState: ErpGridState)
 
 function areErpGridStatesStable(previousState: ErpGridState, nextState: ErpGridState): boolean {
   return (
+    nextState.selectedSignature === previousState.selectedSignature &&
     nextState.visibleSignature === previousState.visibleSignature &&
     Math.abs(nextState.scrollTop - previousState.scrollTop) <= 1 &&
     Math.abs(nextState.scrollHeight - previousState.scrollHeight) <= 1

@@ -252,7 +252,10 @@ export class ErpCollector {
       }
 
       const currentState = await this.#browserManager.getErpGridState();
-      if (currentState.visibleSignature !== state.visibleSignature) {
+      if (
+        currentState.visibleSignature !== state.visibleSignature ||
+        currentState.selectedSignature !== state.selectedSignature
+      ) {
         state = currentState;
         endConfirmationAttempts = 0;
         continue;
@@ -262,10 +265,27 @@ export class ErpCollector {
 
       if (advanceResult.advanced) {
         endConfirmationAttempts = 0;
+        if (advanceResult.selectionAdvanced) {
+          await this.#logger.info("erp", "Selecao da grade do ERP avancou.", {
+            discovered: this.#manifestStore.items.length,
+            visible: advanceResult.state.visiblePoNumbers.length,
+          });
+        }
+        if (advanceResult.usedFallback) {
+          await this.#logger.info("erp", "Selecao da grade do ERP retomada com fallback de scroll.", {
+            discovered: this.#manifestStore.items.length,
+            visible: advanceResult.state.visiblePoNumbers.length,
+          });
+        }
       } else if (advanceResult.reachedEnd && !progress) {
         endConfirmationAttempts += 1;
         await this.#logger.info("erp", "Grade do ERP sem novo avanço; confirmando fim da lista.", {
           count: endConfirmationAttempts,
+          discovered: this.#manifestStore.items.length,
+          visible: advanceResult.state.visiblePoNumbers.length,
+        });
+      } else if (advanceResult.usedFallback && !progress) {
+        await this.#logger.info("erp", "Selecao da grade do ERP travou mesmo apos fallback de scroll.", {
           discovered: this.#manifestStore.items.length,
           visible: advanceResult.state.visiblePoNumbers.length,
         });

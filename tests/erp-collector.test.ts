@@ -13,14 +13,18 @@ function buildGridState(
   scrollTop: number,
   scrollHeight = 2_000,
   clientHeight = 400,
+  selectedIndex = 0,
 ): ErpGridState {
   const visibleItems = visiblePoNumbers.map((value) =>
     typeof value === "string"
       ? { poNumber: value, rowKey: `${value}|row` }
       : { poNumber: value.poNumber, rowKey: value.rowKey ?? `${value.poNumber}|row` },
   );
+  const selectedItem = visibleItems[selectedIndex];
   return {
     visibleItems,
+    selectedItem,
+    selectedSignature: selectedItem?.rowKey,
     visiblePoNumbers: visibleItems.map((item) => item.poNumber),
     visibleSignature: visibleItems.map((item) => item.rowKey).join("|"),
     scrollTop,
@@ -31,11 +35,14 @@ function buildGridState(
 
 function buildAdvanceResult(
   state: ErpGridState,
-  options: Pick<ErpGridAdvanceResult, "advanced" | "reachedEnd">,
+  options: Pick<ErpGridAdvanceResult, "advanced" | "reachedEnd"> &
+    Partial<Pick<ErpGridAdvanceResult, "selectionAdvanced" | "usedFallback">>,
 ): ErpGridAdvanceResult {
   return {
     state,
     advanced: options.advanced,
+    selectionAdvanced: options.selectionAdvanced ?? options.advanced,
+    usedFallback: options.usedFallback ?? false,
     reachedEnd: options.reachedEnd,
   };
 }
@@ -250,5 +257,63 @@ describe("ErpCollector", () => {
         await expect(fs.access(item.downloadPath)).resolves.toBeUndefined();
       }
     }
+  });
+
+  test("logs when the collector resumes the ERP grid with fallback after selection stalls", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "erp-fallback-"));
+    tempDirs.push(tempDir);
+
+    const manifestStore = await createManifestStore(tempDir);
+    const logger = buildLoggerMock();
+    const initialState = buildGridState(["OC0001", "OC0002", "OC0003"], 0, 2_000, 400, 0);
+    const resumedState = buildGridState(["OC0004", "OC0005", "OC0006"], 600, 2_000, 400, 0);
+    const finalState = buildGridState(["OC0007"], 1_600, 2_000, 400, 0);
+    const browserManager = buildBrowserManagerMock(initialState, [
+      buildAdvanceResult(resumedState, {
+        advanced: true,
+        reachedEnd: false,
+        selectionAdvanced: false,
+        usedFallback: true,
+      }),
+      buildAdvanceResult(finalState, {
+        advanced: true,
+        reachedEnd: false,
+      }),
+      buildAdvanceResult(finalState, {
+        advanced: false,
+        reachedEnd: true,
+        selectionAdvanced: false,
+        usedFallback: true,
+      }),
+      buildAdvanceResult(finalState, {
+        advanced: false,
+        reachedEnd: true,
+        selectionAdvanced: false,
+        usedFallback: true,
+      }),
+      buildAdvanceResult(finalState, {
+        advanced: false,
+        reachedEnd: true,
+        selectionAdvanced: false,
+        usedFallback: true,
+      }),
+    ]);
+
+    const collector = new ErpCollector({
+      browserManager,
+      downloadsDir: path.join(tempDir, "downloads"),
+      manifestStore,
+      logger,
+      onCurrentItem: async () => undefined,
+      onManifestChanged: async () => undefined,
+    });
+
+    await collector.discover();
+
+    expect(logger.info).toHaveBeenCalledWith(
+      "erp",
+      "Selecao da grade do ERP retomada com fallback de scroll.",
+      expect.objectContaining({ visible: 3 }),
+    );
   });
 });
