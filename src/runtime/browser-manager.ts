@@ -704,18 +704,23 @@ export class BrowserManager {
   ): Promise<{ poNumber: string; rowKey: string; isSelected: boolean } | undefined> {
     return row.evaluate((input) => {
       const normalize = (raw: string | null | undefined) => (raw ?? "").replace(/\s+/g, " ").trim();
-      const scoreElement = (node: HTMLElement, text: string) => {
+      const looksLikeSingleGridRow = (node: HTMLElement) => {
         const role = node.getAttribute("role")?.toLowerCase() ?? "";
         const tag = node.tagName.toLowerCase();
         const rect = node.getBoundingClientRect();
-        const hasRowSemantics = role === "row" || tag === "tr";
-        const rowSized = rect.height >= 20 && rect.height <= 90;
-        const children = node.children.length;
+        const childCount = node.children.length;
+        const text = normalize(node.innerText || node.textContent);
+
+        if ((role === "row" || tag === "tr") && text) {
+          return true;
+        }
+
         return (
-          (hasRowSemantics ? 10_000 : 0) +
-          (rowSized ? 2_000 : 0) +
-          Math.min(children, 20) * 25 +
-          Math.min(text.length, 500)
+          rect.height >= 20 &&
+          rect.height <= 90 &&
+          childCount >= 2 &&
+          childCount <= 20 &&
+          Boolean(text)
         );
       };
       const matchesSelectedClass = (node: HTMLElement) => {
@@ -728,20 +733,14 @@ export class BrowserManager {
         return undefined;
       }
 
-      let bestText = poNumber;
-      let bestScore = 0;
+      let rowRoot: HTMLElement | null = null;
       let current: HTMLElement | null = input as HTMLElement;
       let isSelected = false;
       const activeElement = document.activeElement instanceof HTMLElement ? document.activeElement : null;
 
       while (current) {
-        const text = normalize(current.innerText || current.textContent);
-        if (text) {
-          const score = scoreElement(current, text);
-          if (score > bestScore) {
-            bestText = text;
-            bestScore = score;
-          }
+        if (!rowRoot && looksLikeSingleGridRow(current)) {
+          rowRoot = current;
         }
 
         if (
@@ -756,9 +755,11 @@ export class BrowserManager {
         current = current.parentElement;
       }
 
+      const rowKey = normalize(rowRoot?.innerText || rowRoot?.textContent) || poNumber;
+
       return {
         poNumber,
-        rowKey: bestText || poNumber,
+        rowKey,
         isSelected,
       };
     });
