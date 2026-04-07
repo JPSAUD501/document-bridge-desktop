@@ -1,7 +1,7 @@
 {
   "name": "pegasus-desktop",
   "private": true,
-  "version": "1.0.39",
+  "version": "1.0.40",
   "description": "Pegasus — Desktop automation for ERP-to-MIDAS document workflows.",
   "repository": {
     "type": "git",
