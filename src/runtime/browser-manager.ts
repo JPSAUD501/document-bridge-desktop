@@ -161,6 +161,8 @@ export class BrowserManager {
 
   async openErpPurchaseOrder(poNumber: string, rowKey?: string): Promise<void> {
     await this.erpPage.bringToFront().catch(() => undefined);
+    const expectedRowKey = rowKey;
+
     for (let attempt = 1; attempt <= 3; attempt += 1) {
       try {
         const selected = await this.selectErpPurchaseOrderRow(poNumber, rowKey);
@@ -168,7 +170,14 @@ export class BrowserManager {
           throw new Error(`Nao foi possivel alinhar a selecao na OC ${poNumber}.`);
         }
 
-        await this.pressErpKey("Enter");
+        const targetCandidate = await this.findVisibleErpRowCandidate(poNumber, expectedRowKey);
+        if (!targetCandidate) {
+          throw new Error(`Nao foi possivel reencontrar a OC ${poNumber} apos selecionar a linha.`);
+        }
+
+        await targetCandidate.row.scrollIntoViewIfNeeded().catch(() => undefined);
+        await targetCandidate.row.click({ timeout: APP_TIMEOUTS.medium }).catch(() => undefined);
+        await targetCandidate.row.press("Enter", { timeout: APP_TIMEOUTS.medium });
       } catch {
         await sleep(APP_TIMEOUTS.keyboardSettle);
       }
@@ -291,6 +300,14 @@ export class BrowserManager {
     }
 
     return false;
+  }
+
+  async findVisibleErpRowCandidate(poNumber: string, rowKey?: string): Promise<ErpRowCandidate | undefined> {
+    const candidates = (await this.collectErpRowCandidates()).filter((candidate) => candidate.inViewport);
+    return candidates.find(
+      (candidate) =>
+        candidate.snapshot?.poNumber === poNumber && (!rowKey || candidate.snapshot.rowKey === rowKey),
+    );
   }
 
   async downloadErpAttachment(downloadPath: string): Promise<{ originalFileName: string }> {
