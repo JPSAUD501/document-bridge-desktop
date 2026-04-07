@@ -42,10 +42,30 @@ interface ErpRowCandidate {
   interactable: boolean;
 }
 
+interface ErpRowSnapshotCell {
+  field?: string;
+  value: string;
+}
+
+interface SerializedErpRowCandidate {
+  index: number;
+  inViewport: boolean;
+  interactable: boolean;
+  poNumber?: string;
+  isSelected: boolean;
+  rowCells: ErpRowSnapshotCell[];
+}
+
 const ERP_GRID_STABLE_SAMPLES = 3;
 const ERP_GRID_SAMPLE_INTERVAL_MS = 200;
 const ERP_GRID_SETTLE_TIMEOUT_MS = 3_000;
 const ERP_GRID_SELECTION_RETRIES = 3;
+const ERP_GRID_NAV_STABLE_SAMPLES = 1;
+const ERP_GRID_NAV_SAMPLE_INTERVAL_MS = 50;
+const ERP_GRID_NAV_SETTLE_TIMEOUT_MS = 750;
+const ERP_GRID_NAV_BURST_STEPS = 24;
+const ERP_GRID_NAV_STAGNANT_ATTEMPTS = 2;
+const ERP_KEYBOARD_NAV_SETTLE_MS = 50;
 
 export class BrowserManager {
   #browser?: Browser;
@@ -277,8 +297,12 @@ export class BrowserManager {
     let stagnantAttempts = 0;
 
     for (let attempt = 0; attempt < 150; attempt += 1) {
-      await this.pressErpKey("ArrowUp").catch(() => undefined);
-      const latest = await this.waitForErpGridStabilized();
+      await this.pressErpKey("ArrowUp", { settleMs: ERP_KEYBOARD_NAV_SETTLE_MS }).catch(() => undefined);
+      const latest = await this.waitForErpGridStabilized({
+        timeoutMs: ERP_GRID_NAV_SETTLE_TIMEOUT_MS,
+        sampleIntervalMs: ERP_GRID_NAV_SAMPLE_INTERVAL_MS,
+        stableSamples: ERP_GRID_NAV_STABLE_SAMPLES,
+      });
 
       if (didErpGridAdvance(currentState, latest)) {
         currentState = latest;
@@ -470,28 +494,43 @@ export class BrowserManager {
     }
   }
 
-  async pressErpKey(key: string): Promise<void> {
-    await sleep(APP_TIMEOUTS.keyboardSettle);
+  async pressErpKey(
+    key: string,
+    options: {
+      settleMs?: number;
+    } = {},
+  ): Promise<void> {
+    const settleMs = options.settleMs ?? APP_TIMEOUTS.keyboardSettle;
+    await sleep(settleMs);
     await this.erpPage.keyboard.press(key);
-    await sleep(APP_TIMEOUTS.keyboardSettle);
+    await sleep(settleMs);
   }
 
   getErpRowInputs() {
     return this.erpPage.locator(ERP_SELECTORS.rowInputs);
   }
 
-  async waitForErpGridStabilized(timeoutMs = ERP_GRID_SETTLE_TIMEOUT_MS): Promise<ErpGridState> {
+  async waitForErpGridStabilized(
+    options: {
+      timeoutMs?: number;
+      sampleIntervalMs?: number;
+      stableSamples?: number;
+    } = {},
+  ): Promise<ErpGridState> {
     await this.waitForErpGrid();
+    const timeoutMs = options.timeoutMs ?? ERP_GRID_SETTLE_TIMEOUT_MS;
+    const sampleIntervalMs = options.sampleIntervalMs ?? ERP_GRID_SAMPLE_INTERVAL_MS;
+    const stableSamplesRequired = options.stableSamples ?? ERP_GRID_STABLE_SAMPLES;
     let previousState = await this.readErpGridState();
     let stableSamples = 0;
     const deadline = Date.now() + timeoutMs;
 
     while (Date.now() < deadline) {
-      await sleep(ERP_GRID_SAMPLE_INTERVAL_MS);
+      await sleep(sampleIntervalMs);
       const nextState = await this.readErpGridState();
       if (areErpGridStatesStable(previousState, nextState)) {
         stableSamples += 1;
-        if (stableSamples >= ERP_GRID_STABLE_SAMPLES) {
+        if (stableSamples >= stableSamplesRequired) {
           return nextState;
         }
       } else {
@@ -728,15 +767,46 @@ export class BrowserManager {
       forceFocus: !baseline.selectedItem,
     });
 
-    await this.pressErpKey("ArrowDown").catch(() => undefined);
-    const latest = await this.waitForErpGridStabilized();
+    let latest = preparedBaseline;
+    let selectionAdvanced = false;
+    let stagnantAttempts = 0;
+
+    for (let step = 0; step < ERP_GRID_NAV_BURST_STEPS; step += 1) {
+      await this.pressErpKey("ArrowDown", { settleMs: ERP_KEYBOARD_NAV_SETTLE_MS }).catch(() => undefined);
+      latest = await this.waitForErpGridStabilized({
+        timeoutMs: ERP_GRID_NAV_SETTLE_TIMEOUT_MS,
+        sampleIntervalMs: ERP_GRID_NAV_SAMPLE_INTERVAL_MS,
+        stableSamples: ERP_GRID_NAV_STABLE_SAMPLES,
+      });
+
+      if (latest.visibleSignature !== preparedBaseline.visibleSignature) {
+        return {
+          state: latest,
+          advanced: true,
+          selectionAdvanced:
+            selectionAdvanced ||
+            (Boolean(preparedBaseline.selectedSignature) &&
+              Boolean(latest.selectedSignature) &&
+              preparedBaseline.selectedSignature !== latest.selectedSignature),
+        };
+      }
+
+      if (latest.selectedSignature !== preparedBaseline.selectedSignature) {
+        selectionAdvanced = true;
+        stagnantAttempts = 0;
+        continue;
+      }
+
+      stagnantAttempts += 1;
+      if (stagnantAttempts >= ERP_GRID_NAV_STAGNANT_ATTEMPTS) {
+        break;
+      }
+    }
+
     return {
       state: latest,
       advanced: didErpGridAdvance(preparedBaseline, latest),
-      selectionAdvanced:
-        Boolean(preparedBaseline.selectedSignature) &&
-        Boolean(latest.selectedSignature) &&
-        preparedBaseline.selectedSignature !== latest.selectedSignature,
+      selectionAdvanced,
     };
   }
 
@@ -788,13 +858,34 @@ export class BrowserManager {
 
   async collectErpRowCandidates(): Promise<ErpRowCandidate[]> {
     const rows = this.getErpRowInputs();
-    const count = await rows.count();
-    if (count === 0) {
-      return [];
-    }
+    const snapshots = (await this.erpPage.evaluate((selector) => {
+      const normalize = (raw: string | null | undefined) => (raw ?? "").replace(/\s+/g, " ").trim();
+      const looksLikeSingleGridRow = (node: HTMLElement) => {
+        const role = node.getAttribute("role")?.toLowerCase() ?? "";
+        const tag = node.tagName.toLowerCase();
+        const rect = node.getBoundingClientRect();
+        const childCount = node.children.length;
+        const text = normalize(node.innerText || node.textContent);
 
-    const layout = await this.erpPage.evaluate((selector) => {
-      return Array.from(document.querySelectorAll(selector)).map((input, index) => {
+        if ((role === "row" || tag === "tr") && text) {
+          return true;
+        }
+
+        return (
+          rect.height >= 20 &&
+          rect.height <= 90 &&
+          childCount >= 2 &&
+          childCount <= 20 &&
+          Boolean(text)
+        );
+      };
+      const matchesSelectedClass = (node: HTMLElement) => {
+        const className = typeof node.className === "string" ? node.className : "";
+        return /\b(selected|active|current|focused)\b/i.test(className);
+      };
+
+      return Array.from(document.querySelectorAll(selector)).map((node, index) => {
+        const input = node as HTMLInputElement;
         const rect = input.getBoundingClientRect();
         const inViewport = rect.bottom > 0 && rect.top < window.innerHeight;
         const x = rect.left + rect.width / 2;
@@ -807,21 +898,77 @@ export class BrowserManager {
           input.contains(hit) ||
           (rowGridCell !== null && rowGridCell === hitGridCell);
 
-        return { index, inViewport, interactable };
+        const poNumber = normalize(input.value || input.getAttribute("title"));
+        let rowRoot = input.closest('[role="row"], tr') as HTMLElement | null;
+        let current: HTMLElement | null = input;
+        let isSelected = false;
+        const activeElement = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+
+        while (current) {
+          if (!rowRoot && looksLikeSingleGridRow(current)) {
+            rowRoot = current;
+          }
+
+          if (
+            current.getAttribute("aria-selected") === "true" ||
+            current.getAttribute("data-dyn-selected") === "true" ||
+            matchesSelectedClass(current) ||
+            (activeElement !== null && (activeElement === current || current.contains(activeElement)))
+          ) {
+            isSelected = true;
+          }
+
+          current = current.parentElement;
+        }
+
+        const rowCells = Array.from(rowRoot?.querySelectorAll("input") ?? [])
+          .map((control) => {
+            const field =
+              control.getAttribute("id") ||
+              control.getAttribute("name") ||
+              control.getAttribute("data-dyn-controlname") ||
+              control.getAttribute("aria-label") ||
+              undefined;
+            const value = normalize(
+              (control as HTMLInputElement).value ||
+                control.getAttribute("title") ||
+                control.getAttribute("aria-label"),
+            );
+
+            return { field, value };
+          })
+          .filter((cell) => Boolean(cell.value));
+
+        return {
+          index,
+          inViewport,
+          interactable,
+          poNumber: poNumber || undefined,
+          isSelected,
+          rowCells,
+        };
       });
-    }, ERP_SELECTORS.rowInputs);
+    }, ERP_SELECTORS.rowInputs)) as SerializedErpRowCandidate[];
+
+    if (snapshots.length === 0) {
+      return [];
+    }
 
     const candidates: ErpRowCandidate[] = [];
-    for (let index = 0; index < count; index += 1) {
-      const row = rows.nth(index);
-      const snapshot = await this.readErpRowSnapshot(row);
-      const metadata = layout[index];
+    for (const snapshot of snapshots) {
+      const row = rows.nth(snapshot.index);
       candidates.push({
-        index,
+        index: snapshot.index,
         row,
-        snapshot,
-        inViewport: metadata?.inViewport ?? false,
-        interactable: metadata?.interactable ?? false,
+        snapshot: snapshot.poNumber
+          ? {
+              poNumber: snapshot.poNumber,
+              rowKey: buildErpRowKey(snapshot.rowCells, snapshot.poNumber),
+              isSelected: snapshot.isSelected,
+            }
+          : undefined,
+        inViewport: snapshot.inViewport,
+        interactable: snapshot.interactable,
       });
     }
 
