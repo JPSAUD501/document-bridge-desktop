@@ -177,7 +177,8 @@ export class BrowserManager {
 
         await targetCandidate.row.scrollIntoViewIfNeeded().catch(() => undefined);
         await targetCandidate.row.click({ timeout: APP_TIMEOUTS.medium }).catch(() => undefined);
-        await targetCandidate.row.press("Enter", { timeout: APP_TIMEOUTS.medium });
+        await sleep(APP_TIMEOUTS.keyboardSettle);
+        await this.erpPage.keyboard.press("Enter");
       } catch {
         await sleep(APP_TIMEOUTS.keyboardSettle);
       }
@@ -336,12 +337,16 @@ export class BrowserManager {
     const closeAttachmentButton = this.erpPage.locator(ERP_SELECTORS.closeAttachmentButton).last();
     if ((await closeAttachmentButton.count()) > 0) {
       await closeAttachmentButton.click().catch(() => undefined);
+      await closeAttachmentButton.waitFor({ state: "hidden", timeout: APP_TIMEOUTS.medium }).catch(() => undefined);
     }
 
     const closePurchaseButton = this.erpPage.locator(ERP_SELECTORS.closePurchaseButton).last();
     if ((await closePurchaseButton.count()) > 0) {
       await closePurchaseButton.click().catch(() => undefined);
+      await closePurchaseButton.waitFor({ state: "hidden", timeout: APP_TIMEOUTS.medium }).catch(() => undefined);
     }
+
+    await sleep(APP_TIMEOUTS.gridSettle);
   }
 
   async advanceErpGrid(previousState?: ErpGridState): Promise<ErpGridAdvanceResult> {
