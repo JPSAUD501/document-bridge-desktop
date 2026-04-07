@@ -161,38 +161,17 @@ export class BrowserManager {
 
   async openErpPurchaseOrder(poNumber: string, rowKey?: string): Promise<void> {
     await this.erpPage.bringToFront().catch(() => undefined);
-    const candidates = (await this.collectErpRowCandidates()).filter((candidate) => candidate.inViewport);
-
-    const targetCandidate = candidates.find(
-      (candidate) =>
-        candidate.snapshot?.poNumber === poNumber && (!rowKey || candidate.snapshot.rowKey === rowKey),
-    );
-
-    if (!targetCandidate) {
-      throw new Error(`Nao foi possivel localizar a OC ${poNumber} na grade atual do ERP.`);
-    }
-
-    const focusCandidate =
-      this.resolveNearestInteractableErpRow(candidates, targetCandidate.index) ?? targetCandidate;
-    const moveSteps = targetCandidate.index - focusCandidate.index;
-
     for (let attempt = 1; attempt <= 3; attempt += 1) {
       try {
-        await focusCandidate.row.scrollIntoViewIfNeeded().catch(() => undefined);
-        await focusCandidate.row.click({ timeout: APP_TIMEOUTS.medium });
-        await sleep(APP_TIMEOUTS.keyboardSettle);
-
-        const navigationKey = moveSteps < 0 ? "ArrowUp" : "ArrowDown";
-        for (let step = 0; step < Math.abs(moveSteps); step += 1) {
-          await this.pressErpKey(navigationKey);
+        const selected = await this.selectErpPurchaseOrderRow(poNumber, rowKey);
+        if (!selected) {
+          throw new Error(`Nao foi possivel alinhar a selecao na OC ${poNumber}.`);
         }
 
         await this.pressErpKey("Enter");
       } catch {
         await sleep(APP_TIMEOUTS.keyboardSettle);
-        await focusCandidate.row.click({ timeout: APP_TIMEOUTS.medium }).catch(() => undefined);
-        await sleep(APP_TIMEOUTS.keyboardSettle);
-        await this.pressErpKey("Enter").catch(() => undefined);
+        await this.pressErpKey("Escape").catch(() => undefined);
       }
 
       if (await this.waitForErpPurchaseOrderReady()) {
@@ -208,6 +187,99 @@ export class BrowserManager {
     }
 
     throw new Error(`Nao foi possivel abrir a OC ${poNumber} no ERP para acessar os anexos.`);
+  }
+
+  async selectErpPurchaseOrderRow(poNumber: string, rowKey?: string): Promise<boolean> {
+    let candidates = (await this.collectErpRowCandidates()).filter((candidate) => candidate.inViewport);
+    let targetCandidate = candidates.find(
+      (candidate) =>
+        candidate.snapshot?.poNumber === poNumber && (!rowKey || candidate.snapshot.rowKey === rowKey),
+    );
+
+    if (!targetCandidate || !targetCandidate.snapshot) {
+      throw new Error(`Nao foi possivel localizar a OC ${poNumber} na grade atual do ERP.`);
+    }
+
+    const targetRowKey = targetCandidate.snapshot.rowKey;
+    if (await this.trySelectErpCandidate(targetCandidate, targetRowKey)) {
+      return true;
+    }
+
+    let state = await this.waitForErpGridStabilized({
+      timeoutMs: ERP_GRID_NAV_SETTLE_TIMEOUT_MS,
+      sampleIntervalMs: ERP_GRID_NAV_SAMPLE_INTERVAL_MS,
+      stableSamples: ERP_GRID_NAV_STABLE_SAMPLES,
+    });
+    candidates = (await this.collectErpRowCandidates()).filter((candidate) => candidate.inViewport);
+    targetCandidate =
+      candidates.find((candidate) => candidate.snapshot?.rowKey === targetRowKey) ?? targetCandidate;
+
+    let selectedCandidate = candidates.find(
+      (candidate) => candidate.snapshot?.rowKey === state.selectedItem?.rowKey,
+    );
+
+    if (!selectedCandidate) {
+      const focusCandidate =
+        this.resolveNearestInteractableErpRow(candidates, targetCandidate.index) ?? targetCandidate;
+      if (!(await this.trySelectErpCandidate(focusCandidate, focusCandidate.snapshot?.rowKey))) {
+        return false;
+      }
+      state = await this.waitForErpGridStabilized({
+        timeoutMs: ERP_GRID_NAV_SETTLE_TIMEOUT_MS,
+        sampleIntervalMs: ERP_GRID_NAV_SAMPLE_INTERVAL_MS,
+        stableSamples: ERP_GRID_NAV_STABLE_SAMPLES,
+      });
+      candidates = (await this.collectErpRowCandidates()).filter((candidate) => candidate.inViewport);
+      selectedCandidate = candidates.find(
+        (candidate) => candidate.snapshot?.rowKey === state.selectedItem?.rowKey,
+      );
+    }
+
+    if (!selectedCandidate) {
+      return false;
+    }
+
+    const maxSteps = Math.abs(targetCandidate.index - selectedCandidate.index) + 3;
+    for (let step = 0; step <= maxSteps; step += 1) {
+      if (state.selectedItem?.rowKey === targetRowKey) {
+        return true;
+      }
+
+      const selectedIndex = candidates.find(
+        (candidate) => candidate.snapshot?.rowKey === state.selectedItem?.rowKey,
+      )?.index;
+      const refreshedTargetIndex = candidates.find((candidate) => candidate.snapshot?.rowKey === targetRowKey)?.index;
+
+      if (selectedIndex === undefined || refreshedTargetIndex === undefined || selectedIndex === refreshedTargetIndex) {
+        break;
+      }
+
+      await this.pressErpKey(selectedIndex < refreshedTargetIndex ? "ArrowDown" : "ArrowUp", {
+        settleMs: ERP_KEYBOARD_NAV_SETTLE_MS,
+      }).catch(() => undefined);
+      state = await this.waitForErpGridStabilized({
+        timeoutMs: ERP_GRID_NAV_SETTLE_TIMEOUT_MS,
+        sampleIntervalMs: ERP_GRID_NAV_SAMPLE_INTERVAL_MS,
+        stableSamples: ERP_GRID_NAV_STABLE_SAMPLES,
+      });
+      candidates = (await this.collectErpRowCandidates()).filter((candidate) => candidate.inViewport);
+    }
+
+    if (state.selectedItem?.rowKey === targetRowKey) {
+      return true;
+    }
+
+    const refreshedTarget = candidates.find((candidate) => candidate.snapshot?.rowKey === targetRowKey);
+    if (refreshedTarget && (await this.trySelectErpCandidate(refreshedTarget, targetRowKey))) {
+      const latestState = await this.waitForErpGridStabilized({
+        timeoutMs: ERP_GRID_NAV_SETTLE_TIMEOUT_MS,
+        sampleIntervalMs: ERP_GRID_NAV_SAMPLE_INTERVAL_MS,
+        stableSamples: ERP_GRID_NAV_STABLE_SAMPLES,
+      });
+      return latestState.selectedItem?.rowKey === targetRowKey;
+    }
+
+    return false;
   }
 
   async downloadErpAttachment(downloadPath: string): Promise<{ originalFileName: string }> {
@@ -1010,6 +1082,27 @@ export class BrowserManager {
     }
 
     return candidates;
+  }
+
+  async trySelectErpCandidate(candidate: ErpRowCandidate, expectedRowKey?: string): Promise<boolean> {
+    try {
+      await candidate.row.scrollIntoViewIfNeeded().catch(() => undefined);
+      await candidate.row.click({ timeout: APP_TIMEOUTS.medium });
+    } catch {
+      return false;
+    }
+
+    const state = await this.waitForErpGridStabilized({
+      timeoutMs: ERP_GRID_NAV_SETTLE_TIMEOUT_MS,
+      sampleIntervalMs: ERP_GRID_NAV_SAMPLE_INTERVAL_MS,
+      stableSamples: ERP_GRID_NAV_STABLE_SAMPLES,
+    });
+
+    if (!expectedRowKey) {
+      return Boolean(state.selectedItem);
+    }
+
+    return state.selectedItem?.rowKey === expectedRowKey;
   }
 
   async isErpRowInteractable(row: Locator): Promise<boolean> {
