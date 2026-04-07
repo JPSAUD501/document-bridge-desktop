@@ -65,6 +65,7 @@ const ERP_GRID_NAV_SAMPLE_INTERVAL_MS = 50;
 const ERP_GRID_NAV_SETTLE_TIMEOUT_MS = 750;
 const ERP_GRID_NAV_BURST_STEPS = 24;
 const ERP_GRID_NAV_STAGNANT_ATTEMPTS = 2;
+const ERP_GRID_END_STUCK_STEPS = 5;
 const ERP_KEYBOARD_NAV_SETTLE_MS = 50;
 
 export class BrowserManager {
@@ -259,6 +260,15 @@ export class BrowserManager {
           selectionAdvanced: selectionAdvance.selectionAdvanced,
           usedFallback: false,
           reachedEnd: false,
+        };
+      }
+      if (selectionAdvance.stuckOnSameItem) {
+        return {
+          state: selectionAdvance.state,
+          advanced: false,
+          selectionAdvanced: selectionAdvance.selectionAdvanced,
+          usedFallback: false,
+          reachedEnd: true,
         };
       }
       baseline = selectionAdvance.state;
@@ -760,7 +770,13 @@ export class BrowserManager {
 
   async tryAdvanceErpGridSelection(
     baseline: ErpGridState,
-  ): Promise<{ state: ErpGridState; advanced: boolean; visibleAdvanced: boolean; selectionAdvanced: boolean }> {
+  ): Promise<{
+    state: ErpGridState;
+    advanced: boolean;
+    visibleAdvanced: boolean;
+    selectionAdvanced: boolean;
+    stuckOnSameItem: boolean;
+  }> {
     const preparedBaseline = await this.ensureErpGridSelection(baseline, {
       preferredRowKey: baseline.selectedItem?.rowKey,
       preferLastVisible: true,
@@ -770,6 +786,8 @@ export class BrowserManager {
     let latest = preparedBaseline;
     let selectionAdvanced = false;
     let stagnantAttempts = 0;
+    let repeatedSameItemAttempts = 0;
+    const baselineFocusedRowKey = getErpFocusedRowKey(preparedBaseline);
 
     for (let step = 0; step < ERP_GRID_NAV_BURST_STEPS; step += 1) {
       await this.pressErpKey("ArrowDown", { settleMs: ERP_KEYBOARD_NAV_SETTLE_MS }).catch(() => undefined);
@@ -789,18 +807,34 @@ export class BrowserManager {
             (Boolean(preparedBaseline.selectedSignature) &&
               Boolean(latest.selectedSignature) &&
               preparedBaseline.selectedSignature !== latest.selectedSignature),
+          stuckOnSameItem: false,
         };
       }
 
       if (latest.selectedSignature !== preparedBaseline.selectedSignature) {
         selectionAdvanced = true;
         stagnantAttempts = 0;
-        continue;
-      }
-
-      stagnantAttempts += 1;
-      if (stagnantAttempts >= ERP_GRID_NAV_STAGNANT_ATTEMPTS) {
-        break;
+        repeatedSameItemAttempts = 0;
+      } else {
+        stagnantAttempts += 1;
+        if (stagnantAttempts >= ERP_GRID_NAV_STAGNANT_ATTEMPTS) {
+          const latestFocusedRowKey = getErpFocusedRowKey(latest);
+          if (baselineFocusedRowKey && latestFocusedRowKey === baselineFocusedRowKey) {
+            repeatedSameItemAttempts += 1;
+            if (repeatedSameItemAttempts >= ERP_GRID_END_STUCK_STEPS) {
+              return {
+                state: latest,
+                advanced: false,
+                visibleAdvanced: false,
+                selectionAdvanced,
+                stuckOnSameItem: true,
+              };
+            }
+            stagnantAttempts = 0;
+            continue;
+          }
+          break;
+        }
       }
     }
 
@@ -809,6 +843,7 @@ export class BrowserManager {
       advanced: didErpGridAdvance(preparedBaseline, latest),
       visibleAdvanced: latest.visibleSignature !== preparedBaseline.visibleSignature,
       selectionAdvanced,
+      stuckOnSameItem: false,
     };
   }
 
@@ -1159,4 +1194,8 @@ function areErpGridStatesStable(previousState: ErpGridState, nextState: ErpGridS
 function isErpGridSelectionOnLastVisible(state: ErpGridState): boolean {
   const lastVisible = state.visibleItems[state.visibleItems.length - 1];
   return Boolean(lastVisible && state.selectedItem && lastVisible.rowKey === state.selectedItem.rowKey);
+}
+
+function getErpFocusedRowKey(state: ErpGridState): string | undefined {
+  return state.selectedItem?.rowKey ?? state.visibleItems.at(-1)?.rowKey;
 }
