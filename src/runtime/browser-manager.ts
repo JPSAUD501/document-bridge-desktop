@@ -1043,8 +1043,10 @@ export class BrowserManager {
         const poNumber = normalize(input.value || input.getAttribute("title"));
         let rowRoot = input.closest('[role="row"], tr') as HTMLElement | null;
         let current: HTMLElement | null = input;
-        let isSelected = false;
         const activeElement = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+        let isSelected =
+          activeElement !== null &&
+          (activeElement === input || (rowRoot !== null && rowRoot.contains(activeElement)));
 
         while (current) {
           if (!rowRoot && looksLikeSingleGridRow(current)) {
@@ -1054,10 +1056,13 @@ export class BrowserManager {
           if (
             current.getAttribute("aria-selected") === "true" ||
             current.getAttribute("data-dyn-selected") === "true" ||
-            matchesSelectedClass(current) ||
-            (activeElement !== null && (activeElement === current || current.contains(activeElement)))
+            matchesSelectedClass(current)
           ) {
             isSelected = true;
+          }
+
+          if (rowRoot && current === rowRoot) {
+            break;
           }
 
           current = current.parentElement;
