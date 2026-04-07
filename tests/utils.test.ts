@@ -1,5 +1,13 @@
 import { describe, expect, test } from "vitest";
-import { buildCounts, buildManifestItemId, buildSavedPdfName, chunk, normalizePdfFileName } from "../src/lib/utils";
+import {
+  buildCounts,
+  buildErpRowKey,
+  buildManifestItemId,
+  buildSavedPdfName,
+  chunk,
+  normalizeErpRowFieldKey,
+  normalizePdfFileName,
+} from "../src/lib/utils";
 
 describe("utils", () => {
   test("chunks arrays into batches of 50", () => {
@@ -26,6 +34,35 @@ describe("utils", () => {
     expect(buildManifestItemId("HRV-008813", "5401|HRV-008813|2457539")).not.toBe(
       buildManifestItemId("HRV-008813", "5401|HRV-008813|2885021"),
     );
+  });
+
+  test("normalizes ERP field ids by removing volatile row suffixes", () => {
+    expect(normalizeErpRowFieldKey("VendInvoiceProdReceiptNotInvoicedView_PackingSlipIdString_3_2_0_input")).toBe(
+      "VendInvoiceProdReceiptNotInvoicedView_PackingSlipIdString",
+    );
+  });
+
+  test("builds distinct ERP row keys for duplicate OCs with different product receipt numbers", () => {
+    const firstRowKey = buildErpRowKey(
+      [
+        { field: "VendInvoiceProdReceiptNotInvoicedView_InventSiteId_PTR_3_2_0_input", value: "1901" },
+        { field: "VendInvoiceProdReceiptNotInvoicedView_ComputedPurchIdString_3_2_0_input", value: "OC303982" },
+        { field: "VendInvoiceProdReceiptNotInvoicedView_PackingSlipIdString_3_2_0_input", value: "5815" },
+      ],
+      "OC303982",
+    );
+    const secondRowKey = buildErpRowKey(
+      [
+        { field: "VendInvoiceProdReceiptNotInvoicedView_InventSiteId_PTR_3_2_1_input", value: "1901" },
+        { field: "VendInvoiceProdReceiptNotInvoicedView_ComputedPurchIdString_3_2_1_input", value: "OC303982" },
+        { field: "VendInvoiceProdReceiptNotInvoicedView_PackingSlipIdString_3_2_1_input", value: "5821" },
+      ],
+      "OC303982",
+    );
+
+    expect(firstRowKey).not.toBe(secondRowKey);
+    expect(firstRowKey).toContain("VendInvoiceProdReceiptNotInvoicedView_PackingSlipIdString=5815");
+    expect(secondRowKey).toContain("VendInvoiceProdReceiptNotInvoicedView_PackingSlipIdString=5821");
   });
 
   test("builds status counters from manifest items", () => {

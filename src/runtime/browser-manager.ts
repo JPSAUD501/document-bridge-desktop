@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import { chromium, type Browser, type BrowserContext, type Locator, type Page } from "playwright";
 import { registry } from "playwright-core/lib/server/registry/index";
 import { APP_TIMEOUTS, ERP_SELECTORS, ERP_URL, MIDAS_SELECTORS, MIDAS_URL } from "../config";
-import { normalizePdfFileName } from "../lib/utils";
+import { buildErpRowKey, normalizePdfFileName } from "../lib/utils";
 
 interface BrowserManagerOptions {
   authStatePath?: string;
@@ -34,12 +34,18 @@ export interface ErpGridAdvanceResult {
   reachedEnd: boolean;
 }
 
+interface ErpRowCandidate {
+  index: number;
+  row: Locator;
+  snapshot?: { poNumber: string; rowKey: string; isSelected: boolean };
+  inViewport: boolean;
+  interactable: boolean;
+}
+
 const ERP_GRID_STABLE_SAMPLES = 3;
 const ERP_GRID_SAMPLE_INTERVAL_MS = 200;
 const ERP_GRID_SETTLE_TIMEOUT_MS = 3_000;
-const ERP_GRID_SELECTION_RETRIES = 2;
-const ERP_GRID_SCROLL_RETRIES = 3;
-const ERP_GRID_END_TOLERANCE_PX = 12;
+const ERP_GRID_SELECTION_RETRIES = 3;
 
 export class BrowserManager {
   #browser?: Browser;
@@ -105,7 +111,7 @@ export class BrowserManager {
   }
 
   async waitForErpGrid(timeoutMs = APP_TIMEOUTS.long): Promise<void> {
-    await this.getVisibleErpRows().first().waitFor({ timeout: timeoutMs });
+    await this.getErpRowInputs().first().waitFor({ state: "attached", timeout: timeoutMs });
   }
 
   async inspectVisiblePoNumbers(timeoutMs = APP_TIMEOUTS.medium): Promise<string[]> {
@@ -123,72 +129,61 @@ export class BrowserManager {
   }
 
   async getVisibleErpItems(): Promise<Array<{ poNumber: string; rowKey: string }>> {
-    const rows = this.getVisibleErpRows();
-    const count = await rows.count();
-    const items: Array<{ poNumber: string; rowKey: string }> = [];
-
-    for (let index = 0; index < count; index += 1) {
-      const row = rows.nth(index);
-      const snapshot = await this.readErpRowSnapshot(row);
-      if (snapshot) {
-        items.push({ poNumber: snapshot.poNumber, rowKey: snapshot.rowKey });
-      }
-    }
-
-    return items;
+    const candidates = await this.collectErpRowCandidates();
+    return candidates
+      .filter((candidate) => candidate.inViewport && candidate.snapshot)
+      .map((candidate) => ({
+        poNumber: candidate.snapshot!.poNumber,
+        rowKey: candidate.snapshot!.rowKey,
+      }));
   }
 
   async openErpPurchaseOrder(poNumber: string, rowKey?: string): Promise<void> {
     await this.erpPage.bringToFront().catch(() => undefined);
-    const rows = this.getVisibleErpRows();
-    const count = await rows.count();
+    const candidates = (await this.collectErpRowCandidates()).filter((candidate) => candidate.inViewport);
 
-    for (let index = 0; index < count; index += 1) {
-      const row = rows.nth(index);
-      if ((await row.inputValue()).trim() !== poNumber) {
-        continue;
-      }
+    const targetCandidate = candidates.find(
+      (candidate) =>
+        candidate.snapshot?.poNumber === poNumber && (!rowKey || candidate.snapshot.rowKey === rowKey),
+    );
 
-      if (rowKey) {
-        const snapshot = await this.readErpRowSnapshot(row);
-        if (!snapshot || snapshot.rowKey !== rowKey) {
-          continue;
-        }
-      }
+    if (!targetCandidate) {
+      throw new Error(`Nao foi possivel localizar a OC ${poNumber} na grade atual do ERP.`);
+    }
 
-      await row.scrollIntoViewIfNeeded().catch(() => undefined);
+    const focusCandidate =
+      this.resolveNearestInteractableErpRow(candidates, targetCandidate.index) ?? targetCandidate;
+    const moveSteps = targetCandidate.index - focusCandidate.index;
 
-      for (let attempt = 1; attempt <= 3; attempt += 1) {
-        try {
-          if (attempt === 1) {
-            await row.dblclick({ timeout: APP_TIMEOUTS.medium });
-            await sleep(APP_TIMEOUTS.gridSettle);
-            await this.pressErpKey("Enter");
-          } else {
-            await row.click({ timeout: APP_TIMEOUTS.medium });
-            await sleep(APP_TIMEOUTS.keyboardSettle);
-            await this.pressErpKey("Enter");
-          }
-        } catch {
-          await sleep(APP_TIMEOUTS.keyboardSettle);
-          await row.click({ timeout: APP_TIMEOUTS.medium }).catch(() => undefined);
-          await sleep(APP_TIMEOUTS.keyboardSettle);
-          await this.pressErpKey("Enter").catch(() => undefined);
+    for (let attempt = 1; attempt <= 3; attempt += 1) {
+      try {
+        await focusCandidate.row.scrollIntoViewIfNeeded().catch(() => undefined);
+        await focusCandidate.row.click({ timeout: APP_TIMEOUTS.medium });
+        await sleep(APP_TIMEOUTS.keyboardSettle);
+
+        const navigationKey = moveSteps < 0 ? "ArrowUp" : "ArrowDown";
+        for (let step = 0; step < Math.abs(moveSteps); step += 1) {
+          await this.pressErpKey(navigationKey);
         }
 
-        if (await this.waitForErpPurchaseOrderReady()) {
-          return;
-        }
-
-        await this.#onStatus?.(
-          `A OC ${poNumber} ainda nao abriu completamente apos a tentativa ${attempt}; tentando novamente.`,
-        );
-        await this.pressErpKey("Escape").catch(() => undefined);
-        await this.closeErpDialogs().catch(() => undefined);
-        await sleep(APP_TIMEOUTS.gridSettle);
+        await this.pressErpKey("Enter");
+      } catch {
+        await sleep(APP_TIMEOUTS.keyboardSettle);
+        await focusCandidate.row.click({ timeout: APP_TIMEOUTS.medium }).catch(() => undefined);
+        await sleep(APP_TIMEOUTS.keyboardSettle);
+        await this.pressErpKey("Enter").catch(() => undefined);
       }
 
-      break;
+      if (await this.waitForErpPurchaseOrderReady()) {
+        return;
+      }
+
+      await this.#onStatus?.(
+        `A OC ${poNumber} ainda nao abriu completamente apos a tentativa ${attempt}; tentando novamente.`,
+      );
+      await this.pressErpKey("Escape").catch(() => undefined);
+      await this.closeErpDialogs().catch(() => undefined);
+      await sleep(APP_TIMEOUTS.gridSettle);
     }
 
     throw new Error(`Nao foi possivel abrir a OC ${poNumber} no ERP para acessar os anexos.`);
@@ -230,7 +225,10 @@ export class BrowserManager {
 
   async advanceErpGrid(previousState?: ErpGridState): Promise<ErpGridAdvanceResult> {
     await this.erpPage.bringToFront().catch(() => undefined);
-    let baseline = await this.ensureErpGridSelection(previousState ?? (await this.getErpGridState()));
+    let baseline = await this.ensureErpGridSelection(previousState ?? (await this.getErpGridState()), {
+      preferLastVisible: true,
+      forceFocus: true,
+    });
 
     for (let attempt = 1; attempt <= ERP_GRID_SELECTION_RETRIES; attempt += 1) {
       const selectionAdvance = await this.tryAdvanceErpGridSelection(baseline);
@@ -240,54 +238,22 @@ export class BrowserManager {
           advanced: true,
           selectionAdvanced: selectionAdvance.selectionAdvanced,
           usedFallback: false,
-          reachedEnd: isErpGridAtEnd(selectionAdvance.state),
+          reachedEnd: false,
         };
       }
       baseline = selectionAdvance.state;
-    }
-
-    await this.#onStatus?.("A selecao da grade do ERP travou; aplicando fallback de scroll.");
-
-    let latest = baseline;
-    for (let attempt = 1; attempt <= ERP_GRID_SCROLL_RETRIES; attempt += 1) {
-      latest = await this.ensureErpGridSelection(latest, {
-        preferredRowKey: latest.selectedItem?.rowKey,
+      baseline = await this.ensureErpGridSelection(baseline, {
+        preferLastVisible: true,
+        forceFocus: true,
       });
-      await this.performErpGridFallbackAdvanceAttempt();
-      latest = await this.waitForErpGridStabilized();
-
-      if (!didErpGridAdvance(baseline, latest)) {
-        baseline = latest;
-        continue;
-      }
-
-      const resumedState = await this.ensureErpGridSelection(latest);
-      const resumedAdvance = await this.tryAdvanceErpGridSelection(resumedState);
-      if (resumedAdvance.advanced) {
-        return {
-          state: resumedAdvance.state,
-          advanced: true,
-          selectionAdvanced: true,
-          usedFallback: true,
-          reachedEnd: isErpGridAtEnd(resumedAdvance.state),
-        };
-      }
-
-      return {
-        state: resumedAdvance.state,
-        advanced: true,
-        selectionAdvanced: false,
-        usedFallback: true,
-        reachedEnd: isErpGridAtEnd(resumedAdvance.state),
-      };
     }
 
     return {
-      state: latest,
+      state: baseline,
       advanced: false,
       selectionAdvanced: false,
-      usedFallback: true,
-      reachedEnd: isErpGridAtEnd(latest),
+      usedFallback: false,
+      reachedEnd: isErpGridSelectionOnLastVisible(baseline),
     };
   }
 
@@ -295,119 +261,41 @@ export class BrowserManager {
     await this.advanceErpGrid().catch(() => undefined);
   }
 
-  async performErpGridFallbackAdvanceAttempt(): Promise<void> {
-    await this.erpPage.bringToFront().catch(() => undefined);
-    const rows = this.getVisibleErpRows();
-    if ((await rows.count()) > 0) {
-      const currentState = await this.getErpGridState().catch(() => undefined);
-      let anchorRow = rows.first();
-
-      if (currentState?.selectedItem?.rowKey) {
-        const count = await rows.count();
-        for (let index = 0; index < count; index += 1) {
-          const candidate = rows.nth(index);
-          const snapshot = await this.readErpRowSnapshot(candidate);
-          if (snapshot?.rowKey === currentState.selectedItem.rowKey) {
-            anchorRow = candidate;
-            break;
-          }
-        }
-      }
-
-      await anchorRow.click({ timeout: APP_TIMEOUTS.medium }).catch(() => undefined);
-      await anchorRow
-        .evaluate((input) => {
-          const resolveScrollableMetrics = (start: HTMLElement) => {
-            const candidates: HTMLElement[] = [];
-            let node: HTMLElement | null = start;
-            while (node) {
-              const style = window.getComputedStyle(node);
-              const overflowY = style.overflowY.toLowerCase();
-              const canScroll =
-                node.scrollHeight > node.clientHeight + 8 &&
-                (overflowY.includes("auto") || overflowY.includes("scroll") || overflowY.includes("overlay"));
-              if (canScroll) {
-                candidates.push(node);
-              }
-              node = node.parentElement;
-            }
-
-            if (candidates.length > 0) {
-              return candidates.sort((left, right) => right.scrollHeight - left.scrollHeight)[0] ?? null;
-            }
-
-            return null;
-          };
-
-          const container = resolveScrollableMetrics(input as HTMLElement);
-          if (container) {
-            const delta = Math.max(container.clientHeight * 0.9, 600);
-            container.scrollTo({
-              top: Math.min(container.scrollTop + delta, container.scrollHeight),
-              behavior: "auto",
-            });
-            return;
-          }
-
-          window.scrollBy({ top: 900, behavior: "auto" });
-        })
-        .catch(() => undefined);
-      await sleep(APP_TIMEOUTS.keyboardSettle);
-      await this.erpPage.keyboard.press("PageDown").catch(() => undefined);
-      await sleep(APP_TIMEOUTS.gridSettle);
-    }
-
-    await this.erpPage.mouse.wheel(0, 1200);
-    await sleep(APP_TIMEOUTS.gridSettle + 250);
-  }
-
   async resetErpGridToTop(): Promise<ErpGridState> {
     await this.erpPage.bringToFront().catch(() => undefined);
-    const rows = this.getVisibleErpRows();
+    const rows = this.getErpRowInputs();
     if ((await rows.count()) === 0) {
       return this.getErpGridState();
     }
 
-    const firstRow = rows.first();
-    await firstRow.click({ timeout: APP_TIMEOUTS.medium }).catch(() => undefined);
-    await firstRow
-      .evaluate((input) => {
-        const resolveScrollableMetrics = (start: HTMLElement) => {
-          const candidates: HTMLElement[] = [];
-          let node: HTMLElement | null = start;
-          while (node) {
-            const style = window.getComputedStyle(node);
-            const overflowY = style.overflowY.toLowerCase();
-            const canScroll =
-              node.scrollHeight > node.clientHeight + 8 &&
-              (overflowY.includes("auto") || overflowY.includes("scroll") || overflowY.includes("overlay"));
-            if (canScroll) {
-              candidates.push(node);
-            }
-            node = node.parentElement;
-          }
+    const baseline = await this.ensureErpGridSelection(await this.waitForErpGridStabilized(), {
+      preferFirstVisible: true,
+      forceFocus: true,
+    });
 
-          if (candidates.length > 0) {
-            return candidates.sort((left, right) => right.scrollHeight - left.scrollHeight)[0] ?? null;
-          }
+    let currentState = baseline;
+    let stagnantAttempts = 0;
 
-          return null;
-        };
+    for (let attempt = 0; attempt < 150; attempt += 1) {
+      await this.pressErpKey("ArrowUp").catch(() => undefined);
+      const latest = await this.waitForErpGridStabilized();
 
-        const container = resolveScrollableMetrics(input as HTMLElement);
-        if (container) {
-          container.scrollTo({ top: 0, behavior: "auto" });
-          return;
-        }
+      if (didErpGridAdvance(currentState, latest)) {
+        currentState = latest;
+        stagnantAttempts = 0;
+        continue;
+      }
 
-        window.scrollTo({ top: 0, behavior: "auto" });
-      })
-      .catch(() => undefined);
+      stagnantAttempts += 1;
+      if (stagnantAttempts >= 5) {
+        break;
+      }
+    }
 
-    await sleep(APP_TIMEOUTS.keyboardSettle);
-    await this.erpPage.keyboard.press("Control+Home").catch(() => undefined);
-    await sleep(APP_TIMEOUTS.gridSettle + 250);
-    return this.ensureErpGridSelection(await this.waitForErpGridStabilized(), { preferFirstVisible: true });
+    return this.ensureErpGridSelection(currentState, {
+      preferFirstVisible: true,
+      forceFocus: true,
+    });
   }
 
   async getMidasSupportsMultiple(): Promise<boolean> {
@@ -588,8 +476,8 @@ export class BrowserManager {
     await sleep(APP_TIMEOUTS.keyboardSettle);
   }
 
-  getVisibleErpRows() {
-    return this.erpPage.locator(`${ERP_SELECTORS.rowInputs}:visible`);
+  getErpRowInputs() {
+    return this.erpPage.locator(ERP_SELECTORS.rowInputs);
   }
 
   async waitForErpGridStabilized(timeoutMs = ERP_GRID_SETTLE_TIMEOUT_MS): Promise<ErpGridState> {
@@ -617,13 +505,12 @@ export class BrowserManager {
   }
 
   async readErpGridState(): Promise<ErpGridState> {
-    const rows = this.getVisibleErpRows();
-    const count = await rows.count();
     const visibleItems: Array<{ poNumber: string; rowKey: string }> = [];
     let selectedItem: ErpGridState["selectedItem"];
     const visiblePoNumbers: string[] = [];
+    const candidates = await this.collectErpRowCandidates();
 
-    if (count === 0) {
+    if (candidates.length === 0) {
       return {
         visibleItems,
         selectedItem,
@@ -636,20 +523,22 @@ export class BrowserManager {
       };
     }
 
-    for (let index = 0; index < count; index += 1) {
-      const snapshot = await this.readErpRowSnapshot(rows.nth(index));
-      if (!snapshot) {
+    for (const candidate of candidates) {
+      if (!candidate.snapshot) {
         continue;
       }
 
-      visibleItems.push({ poNumber: snapshot.poNumber, rowKey: snapshot.rowKey });
-      visiblePoNumbers.push(snapshot.poNumber);
-      if (snapshot.isSelected && !selectedItem) {
-        selectedItem = { poNumber: snapshot.poNumber, rowKey: snapshot.rowKey };
+      if (candidate.inViewport) {
+        visibleItems.push({ poNumber: candidate.snapshot.poNumber, rowKey: candidate.snapshot.rowKey });
+        visiblePoNumbers.push(candidate.snapshot.poNumber);
+      }
+
+      if (candidate.snapshot.isSelected && !selectedItem) {
+        selectedItem = { poNumber: candidate.snapshot.poNumber, rowKey: candidate.snapshot.rowKey };
       }
     }
 
-    const metrics = await rows.first().evaluate((input) => {
+    const metrics = await candidates[0]!.row.evaluate((input) => {
       const resolveScrollableMetrics = (start: HTMLElement | null) => {
         const candidates: HTMLElement[] = [];
         let node = start;
@@ -702,7 +591,7 @@ export class BrowserManager {
   async readErpRowSnapshot(
     row: Locator,
   ): Promise<{ poNumber: string; rowKey: string; isSelected: boolean } | undefined> {
-    return row.evaluate((input) => {
+    const snapshot = await row.evaluate((input) => {
       const normalize = (raw: string | null | undefined) => (raw ?? "").replace(/\s+/g, " ").trim();
       const looksLikeSingleGridRow = (node: HTMLElement) => {
         const role = node.getAttribute("role")?.toLowerCase() ?? "";
@@ -733,7 +622,7 @@ export class BrowserManager {
         return undefined;
       }
 
-      let rowRoot: HTMLElement | null = null;
+      let rowRoot = input.closest('[role="row"], tr') as HTMLElement | null;
       let current: HTMLElement | null = input as HTMLElement;
       let isSelected = false;
       const activeElement = document.activeElement instanceof HTMLElement ? document.activeElement : null;
@@ -755,44 +644,77 @@ export class BrowserManager {
         current = current.parentElement;
       }
 
-      const rowKey = normalize(rowRoot?.innerText || rowRoot?.textContent) || poNumber;
-
       return {
         poNumber,
-        rowKey,
         isSelected,
+        rowCells: Array.from(rowRoot?.querySelectorAll("input") ?? [])
+          .map((control) => {
+            const field =
+              control.getAttribute("id") ||
+              control.getAttribute("name") ||
+              control.getAttribute("data-dyn-controlname") ||
+              control.getAttribute("aria-label") ||
+              undefined;
+            const value = normalize(
+              (control as HTMLInputElement).value ||
+                control.getAttribute("title") ||
+                control.getAttribute("aria-label"),
+            );
+
+            return { field, value };
+          })
+          .filter((cell) => Boolean(cell.value)),
       };
     });
+
+    if (!snapshot) {
+      return undefined;
+    }
+
+    return {
+      poNumber: snapshot.poNumber,
+      rowKey: buildErpRowKey(snapshot.rowCells, snapshot.poNumber),
+      isSelected: snapshot.isSelected,
+    };
   }
 
   async ensureErpGridSelection(
     state?: ErpGridState,
-    options: { preferredRowKey?: string; preferFirstVisible?: boolean; preferLastVisible?: boolean } = {},
+    options: {
+      preferredRowKey?: string;
+      preferFirstVisible?: boolean;
+      preferLastVisible?: boolean;
+      forceFocus?: boolean;
+    } = {},
   ): Promise<ErpGridState> {
     let currentState = state ?? (await this.getErpGridState());
-    if (currentState.selectedItem) {
+    const candidates = (await this.collectErpRowCandidates()).filter((candidate) => candidate.inViewport);
+    if (candidates.length === 0) {
       return currentState;
     }
 
-    const rows = this.getVisibleErpRows();
-    const count = await rows.count();
-    if (count === 0) {
+    if (currentState.selectedItem && !options.forceFocus && !options.preferredRowKey) {
       return currentState;
     }
 
-    let targetIndex = options.preferLastVisible ? count - 1 : 0;
+    let targetIndex = this.resolveErpGridSelectionTargetIndex(candidates, currentState, options);
 
-    if (options.preferredRowKey) {
-      for (let index = 0; index < count; index += 1) {
-        const snapshot = await this.readErpRowSnapshot(rows.nth(index));
-        if (snapshot?.rowKey === options.preferredRowKey) {
-          targetIndex = index;
-          break;
-        }
-      }
+    if (targetIndex === undefined) {
+      targetIndex = candidates[0]!.index;
     }
 
-    await rows.nth(targetIndex).click({ timeout: APP_TIMEOUTS.medium }).catch(() => undefined);
+    const targetCandidate = candidates.find((candidate) => candidate.index === targetIndex) ?? candidates[0]!;
+    const targetRow = targetCandidate.row;
+    const targetSnapshot = targetCandidate.snapshot;
+    if (
+      currentState.selectedItem &&
+      targetSnapshot?.rowKey === currentState.selectedItem.rowKey &&
+      !options.forceFocus
+    ) {
+      return currentState;
+    }
+
+    await targetRow.click({ timeout: APP_TIMEOUTS.medium }).catch(() => undefined);
     currentState = await this.waitForErpGridStabilized();
     return currentState;
   }
@@ -802,6 +724,8 @@ export class BrowserManager {
   ): Promise<{ state: ErpGridState; advanced: boolean; selectionAdvanced: boolean }> {
     const preparedBaseline = await this.ensureErpGridSelection(baseline, {
       preferredRowKey: baseline.selectedItem?.rowKey,
+      preferLastVisible: true,
+      forceFocus: !baseline.selectedItem,
     });
 
     await this.pressErpKey("ArrowDown").catch(() => undefined);
@@ -814,6 +738,134 @@ export class BrowserManager {
         Boolean(latest.selectedSignature) &&
         preparedBaseline.selectedSignature !== latest.selectedSignature,
     };
+  }
+
+  resolveErpGridSelectionTargetIndex(
+    candidates: Array<{
+      index: number;
+      snapshot?: { poNumber: string; rowKey: string; isSelected: boolean };
+      inViewport: boolean;
+      interactable: boolean;
+    }>,
+    currentState: ErpGridState,
+    options: {
+      preferredRowKey?: string;
+      preferFirstVisible?: boolean;
+      preferLastVisible?: boolean;
+      forceFocus?: boolean;
+    },
+  ): number | undefined {
+    const interactableCandidates = candidates.filter((candidate) => candidate.inViewport && candidate.interactable);
+
+    if (options.preferredRowKey) {
+      const preferredCandidate = interactableCandidates.find(
+        (candidate) => candidate.snapshot?.rowKey === options.preferredRowKey,
+      );
+      if (preferredCandidate) {
+        return preferredCandidate.index;
+      }
+    }
+
+    if (options.preferLastVisible) {
+      return interactableCandidates.at(-1)?.index ?? candidates.at(-1)?.index;
+    }
+
+    if (options.preferFirstVisible) {
+      return interactableCandidates[0]?.index ?? candidates[0]?.index;
+    }
+
+    if (currentState.selectedItem) {
+      const selectedCandidate = interactableCandidates.find(
+        (candidate) => candidate.snapshot?.rowKey === currentState.selectedItem?.rowKey,
+      );
+      if (selectedCandidate) {
+        return selectedCandidate.index;
+      }
+    }
+
+    return interactableCandidates[0]?.index ?? candidates[0]?.index;
+  }
+
+  async collectErpRowCandidates(): Promise<ErpRowCandidate[]> {
+    const rows = this.getErpRowInputs();
+    const count = await rows.count();
+    if (count === 0) {
+      return [];
+    }
+
+    const layout = await this.erpPage.evaluate((selector) => {
+      return Array.from(document.querySelectorAll(selector)).map((input, index) => {
+        const rect = input.getBoundingClientRect();
+        const inViewport = rect.bottom > 0 && rect.top < window.innerHeight;
+        const x = rect.left + rect.width / 2;
+        const y = rect.top + rect.height / 2;
+        const hit = document.elementFromPoint(x, y);
+        const rowGridCell = input.closest('[role="gridcell"]');
+        const hitGridCell = hit instanceof HTMLElement ? hit.closest('[role="gridcell"]') : null;
+        const interactable =
+          hit === input ||
+          input.contains(hit) ||
+          (rowGridCell !== null && rowGridCell === hitGridCell);
+
+        return { index, inViewport, interactable };
+      });
+    }, ERP_SELECTORS.rowInputs);
+
+    const candidates: ErpRowCandidate[] = [];
+    for (let index = 0; index < count; index += 1) {
+      const row = rows.nth(index);
+      const snapshot = await this.readErpRowSnapshot(row);
+      const metadata = layout[index];
+      candidates.push({
+        index,
+        row,
+        snapshot,
+        inViewport: metadata?.inViewport ?? false,
+        interactable: metadata?.interactable ?? false,
+      });
+    }
+
+    return candidates;
+  }
+
+  async isErpRowInteractable(row: Locator): Promise<boolean> {
+    return row.evaluate((input) => {
+      const rect = input.getBoundingClientRect();
+      if (rect.width <= 0 || rect.height <= 0) {
+        return false;
+      }
+
+      const x = rect.left + rect.width / 2;
+      const y = rect.top + rect.height / 2;
+      const hit = document.elementFromPoint(x, y);
+      if (!(hit instanceof Node)) {
+        return false;
+      }
+
+      const rowGridCell = input.closest('[role="gridcell"]');
+      const hitGridCell = hit instanceof HTMLElement ? hit.closest('[role="gridcell"]') : null;
+      return hit === input || input.contains(hit) || (rowGridCell !== null && rowGridCell === hitGridCell);
+    });
+  }
+
+  resolveNearestInteractableErpRow<T extends { index: number; interactable: boolean }>(
+    candidates: T[],
+    targetIndex: number,
+  ): T | undefined {
+    const interactableCandidates = candidates.filter((candidate) => candidate.interactable);
+    if (interactableCandidates.length === 0) {
+      return undefined;
+    }
+
+    return interactableCandidates.reduce<T | undefined>((best, candidate) => {
+      if (!best) {
+        return candidate;
+      }
+
+      const bestDistance = Math.abs(best.index - targetIndex);
+      const candidateDistance = Math.abs(candidate.index - targetIndex);
+      return candidateDistance < bestDistance ? candidate : best;
+    }, undefined);
   }
 }
 
@@ -944,21 +996,18 @@ function sleep(durationMs: number): Promise<void> {
 function didErpGridAdvance(previousState: ErpGridState, nextState: ErpGridState): boolean {
   return (
     nextState.selectedSignature !== previousState.selectedSignature ||
-    nextState.visibleSignature !== previousState.visibleSignature ||
-    nextState.scrollTop > previousState.scrollTop + 1 ||
-    nextState.scrollHeight > previousState.scrollHeight + 1
+    nextState.visibleSignature !== previousState.visibleSignature
   );
 }
 
 function areErpGridStatesStable(previousState: ErpGridState, nextState: ErpGridState): boolean {
   return (
     nextState.selectedSignature === previousState.selectedSignature &&
-    nextState.visibleSignature === previousState.visibleSignature &&
-    Math.abs(nextState.scrollTop - previousState.scrollTop) <= 1 &&
-    Math.abs(nextState.scrollHeight - previousState.scrollHeight) <= 1
+    nextState.visibleSignature === previousState.visibleSignature
   );
 }
 
-function isErpGridAtEnd(state: ErpGridState): boolean {
-  return state.scrollTop + state.clientHeight >= state.scrollHeight - ERP_GRID_END_TOLERANCE_PX;
+function isErpGridSelectionOnLastVisible(state: ErpGridState): boolean {
+  const lastVisible = state.visibleItems[state.visibleItems.length - 1];
+  return Boolean(lastVisible && state.selectedItem && lastVisible.rowKey === state.selectedItem.rowKey);
 }

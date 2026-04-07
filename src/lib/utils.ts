@@ -3,6 +3,11 @@ import path from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 import type { ManifestItem, StatusCounts } from "../types";
 
+export interface ErpRowKeyPart {
+  field?: string;
+  value?: string;
+}
+
 export function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -56,6 +61,29 @@ export function buildManifestItemId(poNumber: string, rowKey?: string): string {
   const stableKey = (rowKey?.trim() || poNumber).normalize("NFKC");
   const digest = createHash("sha1").update(stableKey).digest("hex").slice(0, 12);
   return `${po}-${digest}`;
+}
+
+export function normalizeErpRowFieldKey(rawField?: string): string {
+  const normalized = (rawField ?? "")
+    .trim()
+    .replace(/_input$/i, "")
+    .replace(/_\d+_\d+_\d+$/i, "");
+  return normalized || "field";
+}
+
+export function buildErpRowKey(parts: ErpRowKeyPart[], poNumber: string): string {
+  const normalizedParts = parts
+    .map((part) => ({
+      field: normalizeErpRowFieldKey(part.field),
+      value: (part.value ?? "").normalize("NFKC").replace(/\s+/g, " ").trim(),
+    }))
+    .filter((part) => Boolean(part.value));
+
+  if (normalizedParts.length === 0) {
+    return poNumber.normalize("NFKC").replace(/\s+/g, " ").trim();
+  }
+
+  return normalizedParts.map((part) => `${part.field}=${part.value}`).join("|");
 }
 
 export async function ensureDir(target: string): Promise<void> {

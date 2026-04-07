@@ -14,7 +14,7 @@ interface ErpCollectorOptions {
   onManifestChanged: () => Promise<void>;
 }
 
-const ERP_MAX_SCAN_PASSES = 500;
+const ERP_MAX_SCAN_PASSES = 10_000;
 const ERP_END_CONFIRMATION_ATTEMPTS = 3;
 
 export class ErpCollector {
@@ -271,21 +271,10 @@ export class ErpCollector {
             visible: advanceResult.state.visiblePoNumbers.length,
           });
         }
-        if (advanceResult.usedFallback) {
-          await this.#logger.info("erp", "Selecao da grade do ERP retomada com fallback de scroll.", {
-            discovered: this.#manifestStore.items.length,
-            visible: advanceResult.state.visiblePoNumbers.length,
-          });
-        }
       } else if (advanceResult.reachedEnd && !progress) {
         endConfirmationAttempts += 1;
         await this.#logger.info("erp", "Grade do ERP sem novo avanço; confirmando fim da lista.", {
           count: endConfirmationAttempts,
-          discovered: this.#manifestStore.items.length,
-          visible: advanceResult.state.visiblePoNumbers.length,
-        });
-      } else if (advanceResult.usedFallback && !progress) {
-        await this.#logger.info("erp", "Selecao da grade do ERP travou mesmo apos fallback de scroll.", {
           discovered: this.#manifestStore.items.length,
           visible: advanceResult.state.visiblePoNumbers.length,
         });
