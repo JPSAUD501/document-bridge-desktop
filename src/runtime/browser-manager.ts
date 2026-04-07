@@ -252,7 +252,7 @@ export class BrowserManager {
 
     for (let attempt = 1; attempt <= ERP_GRID_SELECTION_RETRIES; attempt += 1) {
       const selectionAdvance = await this.tryAdvanceErpGridSelection(baseline);
-      if (selectionAdvance.advanced) {
+      if (selectionAdvance.visibleAdvanced) {
         return {
           state: selectionAdvance.state,
           advanced: true,
@@ -271,7 +271,7 @@ export class BrowserManager {
     return {
       state: baseline,
       advanced: false,
-      selectionAdvanced: false,
+      selectionAdvanced: baseline.selectedSignature !== previousState?.selectedSignature,
       usedFallback: false,
       reachedEnd: isErpGridSelectionOnLastVisible(baseline),
     };
@@ -760,7 +760,7 @@ export class BrowserManager {
 
   async tryAdvanceErpGridSelection(
     baseline: ErpGridState,
-  ): Promise<{ state: ErpGridState; advanced: boolean; selectionAdvanced: boolean }> {
+  ): Promise<{ state: ErpGridState; advanced: boolean; visibleAdvanced: boolean; selectionAdvanced: boolean }> {
     const preparedBaseline = await this.ensureErpGridSelection(baseline, {
       preferredRowKey: baseline.selectedItem?.rowKey,
       preferLastVisible: true,
@@ -783,6 +783,7 @@ export class BrowserManager {
         return {
           state: latest,
           advanced: true,
+          visibleAdvanced: true,
           selectionAdvanced:
             selectionAdvanced ||
             (Boolean(preparedBaseline.selectedSignature) &&
@@ -806,6 +807,7 @@ export class BrowserManager {
     return {
       state: latest,
       advanced: didErpGridAdvance(preparedBaseline, latest),
+      visibleAdvanced: latest.visibleSignature !== preparedBaseline.visibleSignature,
       selectionAdvanced,
     };
   }

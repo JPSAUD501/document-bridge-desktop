@@ -258,4 +258,49 @@ describe("ErpCollector", () => {
       }
     }
   });
+
+  test("confirms end of ERP grid when only the selection keeps moving on the last visible page", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "erp-end-confirmation-"));
+    tempDirs.push(tempDir);
+
+    const manifestStore = await createManifestStore(tempDir);
+    const initialState = buildGridState(["OC0001", "OC0002", "OC0003", "OC0004", "OC0005"], 0);
+    const lastPage = buildGridState(["OC0006", "OC0007"], 1_000, 2_000, 400, 1);
+    const browserManager = buildBrowserManagerMock(initialState, [
+      buildAdvanceResult(lastPage, {
+        advanced: true,
+        reachedEnd: false,
+      }),
+      buildAdvanceResult(lastPage, {
+        advanced: false,
+        selectionAdvanced: true,
+        reachedEnd: true,
+      }),
+      buildAdvanceResult(lastPage, {
+        advanced: false,
+        selectionAdvanced: true,
+        reachedEnd: true,
+      }),
+      buildAdvanceResult(lastPage, {
+        advanced: false,
+        selectionAdvanced: true,
+        reachedEnd: true,
+      }),
+    ]);
+    const logger = buildLoggerMock();
+
+    const collector = new ErpCollector({
+      browserManager,
+      downloadsDir: path.join(tempDir, "downloads"),
+      manifestStore,
+      logger,
+      onCurrentItem: async () => undefined,
+      onManifestChanged: async () => undefined,
+    });
+
+    await collector.discover();
+
+    expect(manifestStore.items).toHaveLength(7);
+    expect(browserManager.advanceErpGrid).toHaveBeenCalledTimes(5);
+  });
 });
