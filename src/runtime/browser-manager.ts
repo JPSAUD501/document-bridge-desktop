@@ -171,7 +171,6 @@ export class BrowserManager {
         await this.pressErpKey("Enter");
       } catch {
         await sleep(APP_TIMEOUTS.keyboardSettle);
-        await this.pressErpKey("Escape").catch(() => undefined);
       }
 
       if (await this.waitForErpPurchaseOrderReady()) {
@@ -181,12 +180,24 @@ export class BrowserManager {
       await this.#onStatus?.(
         `A OC ${poNumber} ainda nao abriu completamente apos a tentativa ${attempt}; tentando novamente.`,
       );
-      await this.pressErpKey("Escape").catch(() => undefined);
-      await this.closeErpDialogs().catch(() => undefined);
-      await sleep(APP_TIMEOUTS.gridSettle);
+      await this.restoreErpGridAfterFailedOpenAttempt().catch(() => undefined);
     }
 
     throw new Error(`Nao foi possivel abrir a OC ${poNumber} no ERP para acessar os anexos.`);
+  }
+
+  async restoreErpGridAfterFailedOpenAttempt(): Promise<void> {
+    await this.closeErpDialogs().catch(() => undefined);
+
+    try {
+      await this.waitForErpGrid(APP_TIMEOUTS.short);
+      return;
+    } catch {
+      await sleep(APP_TIMEOUTS.gridSettle);
+    }
+
+    await this.closeErpDialogs().catch(() => undefined);
+    await this.waitForErpGrid(APP_TIMEOUTS.medium).catch(() => undefined);
   }
 
   async selectErpPurchaseOrderRow(poNumber: string, rowKey?: string): Promise<boolean> {
