@@ -1,27 +1,16 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, test } from "vitest";
+import { afterEach, describe, expect, test } from "vitest";
 import {
   findInstalledBrowserByChannel,
   resolveCorporateBrowserChannel,
   resolveCorporateBrowserExecutable,
 } from "../src/runtime/browser-manager";
 
-const originalEnv = { ...process.env };
 const tempDirs: string[] = [];
 
-beforeEach(() => {
-  process.env = { ...originalEnv };
-  delete process.env.ERP_MIDAS_BROWSER_PATH;
-  delete process.env.ERP_MIDAS_BROWSER_CHANNEL;
-  process.env.PROGRAMFILES = "";
-  process.env["PROGRAMFILES(X86)"] = "";
-  process.env.LOCALAPPDATA = "";
-});
-
 afterEach(async () => {
-  process.env = { ...originalEnv };
   while (tempDirs.length > 0) {
     const tempDir = tempDirs.pop();
     if (tempDir) {
@@ -39,26 +28,40 @@ async function createFakeExecutable(...segments: string[]): Promise<string> {
   return executablePath;
 }
 
+function buildEnv(values: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
+  return {
+    ...values,
+    PROGRAMFILES: values.PROGRAMFILES ?? "",
+    "PROGRAMFILES(X86)": values["PROGRAMFILES(X86)"] ?? "",
+    LOCALAPPDATA: values.LOCALAPPDATA ?? "",
+  };
+}
+
 describe("corporate browser resolver", () => {
   test("uses ERP_MIDAS_BROWSER_PATH when it points to an executable", async () => {
     const executablePath = await createFakeExecutable("Custom", "browser.exe");
-    process.env.ERP_MIDAS_BROWSER_PATH = executablePath;
 
-    await expect(resolveCorporateBrowserExecutable()).resolves.toMatchObject({
+    await expect(
+      resolveCorporateBrowserExecutable(undefined, {
+        env: buildEnv({ ERP_MIDAS_BROWSER_PATH: executablePath }),
+      }),
+    ).resolves.toMatchObject({
       path: executablePath,
       source: "env-path",
     });
   });
 
   test("defaults to Microsoft Edge", () => {
-    expect(resolveCorporateBrowserChannel()).toBe("msedge");
+    expect(resolveCorporateBrowserChannel(buildEnv())).toBe("msedge");
   });
 
   test("finds Microsoft Edge from the default channel", async () => {
     const executablePath = await createFakeExecutable("Microsoft", "Edge", "Application", "msedge.exe");
-    process.env.PROGRAMFILES = path.dirname(path.dirname(path.dirname(path.dirname(executablePath))));
+    const env = buildEnv({
+      PROGRAMFILES: path.dirname(path.dirname(path.dirname(path.dirname(executablePath)))),
+    });
 
-    await expect(resolveCorporateBrowserExecutable()).resolves.toMatchObject({
+    await expect(resolveCorporateBrowserExecutable(undefined, { env })).resolves.toMatchObject({
       path: executablePath,
       source: "channel",
     });
@@ -66,20 +69,28 @@ describe("corporate browser resolver", () => {
 
   test("finds Google Chrome when ERP_MIDAS_BROWSER_CHANNEL is chrome", async () => {
     const executablePath = await createFakeExecutable("Google", "Chrome", "Application", "chrome.exe");
-    process.env.PROGRAMFILES = path.dirname(path.dirname(path.dirname(path.dirname(executablePath))));
-    process.env.ERP_MIDAS_BROWSER_CHANNEL = "chrome";
+    const env = buildEnv({
+      ERP_MIDAS_BROWSER_CHANNEL: "chrome",
+      PROGRAMFILES: path.dirname(path.dirname(path.dirname(path.dirname(executablePath)))),
+    });
 
-    await expect(findInstalledBrowserByChannel("chrome")).resolves.toBe(executablePath);
-    await expect(resolveCorporateBrowserExecutable()).resolves.toMatchObject({
+    await expect(findInstalledBrowserByChannel("chrome", env)).resolves.toBe(executablePath);
+    await expect(resolveCorporateBrowserExecutable(undefined, { env })).resolves.toMatchObject({
       path: executablePath,
       source: "channel",
     });
   });
 
   test("falls back to Playwright when the configured corporate browser is not installed", async () => {
-    process.env.ERP_MIDAS_BROWSER_CHANNEL = "chrome";
+    const playwrightPath = await createFakeExecutable("Playwright", "chrome.exe");
 
-    await expect(resolveCorporateBrowserExecutable()).resolves.toMatchObject({
+    await expect(
+      resolveCorporateBrowserExecutable(undefined, {
+        env: buildEnv({ ERP_MIDAS_BROWSER_CHANNEL: "chrome" }),
+        resolvePlaywrightBrowser: async () => playwrightPath,
+      }),
+    ).resolves.toMatchObject({
+      path: playwrightPath,
       source: "playwright",
     });
   });

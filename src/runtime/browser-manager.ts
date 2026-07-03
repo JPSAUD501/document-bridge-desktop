@@ -17,6 +17,11 @@ export interface ResolvedBrowserExecutable {
   source: "env-path" | "channel" | "playwright";
 }
 
+interface BrowserResolutionOptions {
+  env?: NodeJS.ProcessEnv;
+  resolvePlaywrightBrowser?: (onStatus?: (message: string) => Promise<void>) => Promise<string | undefined>;
+}
+
 export interface ErpGridState {
   visibleItems: Array<{
     poNumber: string;
@@ -1194,8 +1199,10 @@ export class BrowserManager {
 
 export async function resolveCorporateBrowserExecutable(
   onStatus?: (message: string) => Promise<void>,
+  options: BrowserResolutionOptions = {},
 ): Promise<ResolvedBrowserExecutable> {
-  const preferredBrowserPath = process.env.ERP_MIDAS_BROWSER_PATH;
+  const env = options.env ?? process.env;
+  const preferredBrowserPath = env.ERP_MIDAS_BROWSER_PATH;
   if (preferredBrowserPath && (await fileExists(preferredBrowserPath))) {
     await onStatus?.(`Usando o navegador configurado em ERP_MIDAS_BROWSER_PATH: ${preferredBrowserPath}.`);
     return {
@@ -1205,8 +1212,8 @@ export async function resolveCorporateBrowserExecutable(
     };
   }
 
-  const channel = resolveCorporateBrowserChannel();
-  const corporateBrowserPath = await findInstalledBrowserByChannel(channel);
+  const channel = resolveCorporateBrowserChannel(env);
+  const corporateBrowserPath = await findInstalledBrowserByChannel(channel, env);
   if (corporateBrowserPath) {
     const label = channel === "msedge" ? "Microsoft Edge corporativo" : "Google Chrome corporativo";
     await onStatus?.(`Usando ${label}: ${corporateBrowserPath}.`);
@@ -1220,7 +1227,8 @@ export async function resolveCorporateBrowserExecutable(
   await onStatus?.(
     `Nenhum navegador instalado encontrado para ERP_MIDAS_BROWSER_CHANNEL=${channel}; usando fallback Playwright.`,
   );
-  const playwrightBrowserPath = await resolvePlaywrightChromium(onStatus);
+  const resolvePlaywrightBrowser = options.resolvePlaywrightBrowser ?? resolvePlaywrightChromium;
+  const playwrightBrowserPath = await resolvePlaywrightBrowser(onStatus);
   if (playwrightBrowserPath) {
     return {
       path: playwrightBrowserPath,
@@ -1234,8 +1242,8 @@ export async function resolveCorporateBrowserExecutable(
   );
 }
 
-export function resolveCorporateBrowserChannel(): CorporateBrowserChannel {
-  const rawChannel = process.env.ERP_MIDAS_BROWSER_CHANNEL?.trim().toLowerCase();
+export function resolveCorporateBrowserChannel(env: NodeJS.ProcessEnv = process.env): CorporateBrowserChannel {
+  const rawChannel = env.ERP_MIDAS_BROWSER_CHANNEL?.trim().toLowerCase();
   if (!rawChannel) {
     return "msedge";
   }
@@ -1289,8 +1297,9 @@ function safeChromiumExecutablePath(): string | undefined {
 
 export async function findInstalledBrowserByChannel(
   channel: CorporateBrowserChannel,
+  env: NodeJS.ProcessEnv = process.env,
 ): Promise<string | undefined> {
-  const candidates = channel === "msedge" ? buildEdgeCandidates() : buildChromeCandidates();
+  const candidates = channel === "msedge" ? buildEdgeCandidates(env) : buildChromeCandidates(env);
 
   for (const candidate of candidates) {
     if (candidate && (await fileExists(candidate))) {
@@ -1301,30 +1310,30 @@ export async function findInstalledBrowserByChannel(
   return undefined;
 }
 
-function buildEdgeCandidates(): Array<string | undefined> {
+function buildEdgeCandidates(env: NodeJS.ProcessEnv): Array<string | undefined> {
   return [
-    process.env["PROGRAMFILES"]
-      ? `${process.env["PROGRAMFILES"]}\\Microsoft\\Edge\\Application\\msedge.exe`
+    env["PROGRAMFILES"]
+      ? `${env["PROGRAMFILES"]}\\Microsoft\\Edge\\Application\\msedge.exe`
       : undefined,
-    process.env["PROGRAMFILES(X86)"]
-      ? `${process.env["PROGRAMFILES(X86)"]}\\Microsoft\\Edge\\Application\\msedge.exe`
+    env["PROGRAMFILES(X86)"]
+      ? `${env["PROGRAMFILES(X86)"]}\\Microsoft\\Edge\\Application\\msedge.exe`
       : undefined,
-    process.env.LOCALAPPDATA
-      ? `${process.env.LOCALAPPDATA}\\Microsoft\\Edge\\Application\\msedge.exe`
+    env.LOCALAPPDATA
+      ? `${env.LOCALAPPDATA}\\Microsoft\\Edge\\Application\\msedge.exe`
       : undefined,
   ];
 }
 
-function buildChromeCandidates(): Array<string | undefined> {
+function buildChromeCandidates(env: NodeJS.ProcessEnv): Array<string | undefined> {
   return [
-    process.env["PROGRAMFILES"]
-      ? `${process.env["PROGRAMFILES"]}\\Google\\Chrome\\Application\\chrome.exe`
+    env["PROGRAMFILES"]
+      ? `${env["PROGRAMFILES"]}\\Google\\Chrome\\Application\\chrome.exe`
       : undefined,
-    process.env["PROGRAMFILES(X86)"]
-      ? `${process.env["PROGRAMFILES(X86)"]}\\Google\\Chrome\\Application\\chrome.exe`
+    env["PROGRAMFILES(X86)"]
+      ? `${env["PROGRAMFILES(X86)"]}\\Google\\Chrome\\Application\\chrome.exe`
       : undefined,
-    process.env.LOCALAPPDATA
-      ? `${process.env.LOCALAPPDATA}\\Google\\Chrome\\Application\\chrome.exe`
+    env.LOCALAPPDATA
+      ? `${env.LOCALAPPDATA}\\Google\\Chrome\\Application\\chrome.exe`
       : undefined,
   ];
 }
