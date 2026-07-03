@@ -103,10 +103,10 @@ export class BrowserManager {
     );
     this.#context = await chromium.launchPersistentContext(this.#browserProfileDir, {
       acceptDownloads: true,
-      args: ["--disable-pdf-viewer"],
+      args: ["--disable-pdf-viewer", "--start-maximized"],
       executablePath: browserExecutable.path,
       headless: false,
-      viewport: { width: 1373, height: 776 },
+      viewport: null,
     });
     this.#browser = this.#context.browser() ?? undefined;
     this.#context.setDefaultNavigationTimeout(APP_TIMEOUTS.long);
