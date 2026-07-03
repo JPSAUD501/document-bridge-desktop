@@ -5,8 +5,16 @@ import { APP_TIMEOUTS, ERP_SELECTORS, ERP_URL, MIDAS_SELECTORS, MIDAS_URL } from
 import { buildErpRowKey, normalizePdfFileName } from "../lib/utils";
 
 interface BrowserManagerOptions {
-  authStatePath?: string;
+  browserProfileDir: string;
   onStatus?: (message: string) => Promise<void>;
+}
+
+export type CorporateBrowserChannel = "msedge" | "chrome";
+
+export interface ResolvedBrowserExecutable {
+  path: string;
+  label: string;
+  source: "env-path" | "channel" | "playwright";
 }
 
 export interface ErpGridState {
@@ -73,33 +81,33 @@ export class BrowserManager {
   #context?: BrowserContext;
   #erpPage?: Page;
   #midasPage?: Page;
-  readonly #authStatePath?: string;
+  readonly #browserProfileDir: string;
   readonly #onStatus?: (message: string) => Promise<void>;
 
-  constructor(options: BrowserManagerOptions = {}) {
-    this.#authStatePath = options.authStatePath;
+  constructor(options: BrowserManagerOptions) {
+    this.#browserProfileDir = options.browserProfileDir;
     this.#onStatus = options.onStatus;
   }
 
   async launch(): Promise<void> {
-    await this.#onStatus?.("Resolvendo um navegador Chromium compativel.");
-    const chromeExecutablePath = await resolveChromiumExecutable(this.#onStatus);
-    await this.#onStatus?.(`Abrindo o navegador Chromium em ${chromeExecutablePath}.`);
-    this.#browser = await chromium.launch({
-      headless: false,
-      executablePath: chromeExecutablePath,
-      args: ["--disable-pdf-viewer"],
-    });
-
-    const storageState = await this.resolveStorageState();
-    this.#context = await this.#browser.newContext({
+    await this.#onStatus?.("Resolvendo o navegador corporativo configurado para a automacao.");
+    const browserExecutable = await resolveCorporateBrowserExecutable(this.#onStatus);
+    await fs.mkdir(this.#browserProfileDir, { recursive: true });
+    await this.#onStatus?.(
+      `Abrindo ${browserExecutable.label} em ${browserExecutable.path} com perfil persistente ${this.#browserProfileDir}.`,
+    );
+    this.#context = await chromium.launchPersistentContext(this.#browserProfileDir, {
       acceptDownloads: true,
-      storageState,
+      args: ["--disable-pdf-viewer"],
+      executablePath: browserExecutable.path,
+      headless: false,
       viewport: { width: 1373, height: 776 },
     });
+    this.#browser = this.#context.browser() ?? undefined;
     this.#context.setDefaultNavigationTimeout(APP_TIMEOUTS.long);
     this.#context.setDefaultTimeout(APP_TIMEOUTS.long);
 
+    await this.closeExistingContextPages();
     this.#erpPage = await this.#context.newPage();
     this.#midasPage = await this.#context.newPage();
     this.#context.on("page", (page) => {
@@ -571,26 +579,26 @@ export class BrowserManager {
     }
   }
 
-  async persistStorageState(): Promise<void> {
-    if (!this.#context || !this.#authStatePath) {
+  async closeExistingContextPages(): Promise<void> {
+    if (!this.#context) {
       return;
     }
 
-    await this.#context.storageState({ path: this.#authStatePath });
-    await this.#onStatus?.(`Sessao do navegador salva em ${this.#authStatePath}.`);
+    const pages = this.#context.pages();
+    if (pages.length === 0) {
+      return;
+    }
+
+    await this.#onStatus?.("Fechando abas restauradas do perfil persistente antes de iniciar ERP e Midas.");
+    await Promise.allSettled(pages.map((page) => page.close()));
   }
 
-  async resolveStorageState(): Promise<string | undefined> {
-    if (!this.#authStatePath) {
-      return undefined;
+  async persistStorageState(): Promise<void> {
+    if (!this.#context) {
+      return;
     }
 
-    if (!(await fileExists(this.#authStatePath))) {
-      return undefined;
-    }
-
-    await this.#onStatus?.(`Reutilizando sessao salva em ${this.#authStatePath}.`);
-    return this.#authStatePath;
+    await this.#onStatus?.(`Sessao corporativa preservada no perfil persistente ${this.#browserProfileDir}.`);
   }
 
   async waitForErpPurchaseOrderReady(): Promise<boolean> {
@@ -1184,28 +1192,60 @@ export class BrowserManager {
   }
 }
 
-async function resolveChromiumExecutable(
+export async function resolveCorporateBrowserExecutable(
   onStatus?: (message: string) => Promise<void>,
-): Promise<string> {
+): Promise<ResolvedBrowserExecutable> {
   const preferredBrowserPath = process.env.ERP_MIDAS_BROWSER_PATH;
   if (preferredBrowserPath && (await fileExists(preferredBrowserPath))) {
     await onStatus?.(`Usando o navegador configurado em ERP_MIDAS_BROWSER_PATH: ${preferredBrowserPath}.`);
-    return preferredBrowserPath;
+    return {
+      path: preferredBrowserPath,
+      label: "navegador configurado",
+      source: "env-path",
+    };
   }
 
+  const channel = resolveCorporateBrowserChannel();
+  const corporateBrowserPath = await findInstalledBrowserByChannel(channel);
+  if (corporateBrowserPath) {
+    const label = channel === "msedge" ? "Microsoft Edge corporativo" : "Google Chrome corporativo";
+    await onStatus?.(`Usando ${label}: ${corporateBrowserPath}.`);
+    return {
+      path: corporateBrowserPath,
+      label,
+      source: "channel",
+    };
+  }
+
+  await onStatus?.(
+    `Nenhum navegador instalado encontrado para ERP_MIDAS_BROWSER_CHANNEL=${channel}; usando fallback Playwright.`,
+  );
   const playwrightBrowserPath = await resolvePlaywrightChromium(onStatus);
   if (playwrightBrowserPath) {
-    return playwrightBrowserPath;
-  }
-
-  const localBrowserPath = await findInstalledChromiumBrowser();
-  if (localBrowserPath) {
-    await onStatus?.(`Usando o navegador instalado localmente como fallback: ${localBrowserPath}.`);
-    return localBrowserPath;
+    return {
+      path: playwrightBrowserPath,
+      label: "Chromium gerenciado pelo Playwright",
+      source: "playwright",
+    };
   }
 
   throw new Error(
-    "Nenhum navegador Chromium compativel foi encontrado. Defina ERP_MIDAS_BROWSER_PATH ou reinstale o Playwright.",
+    "Nenhum navegador Chromium compativel foi encontrado. Defina ERP_MIDAS_BROWSER_PATH, instale Edge/Chrome ou reinstale o Playwright.",
+  );
+}
+
+export function resolveCorporateBrowserChannel(): CorporateBrowserChannel {
+  const rawChannel = process.env.ERP_MIDAS_BROWSER_CHANNEL?.trim().toLowerCase();
+  if (!rawChannel) {
+    return "msedge";
+  }
+
+  if (rawChannel === "msedge" || rawChannel === "chrome") {
+    return rawChannel;
+  }
+
+  throw new Error(
+    `ERP_MIDAS_BROWSER_CHANNEL invalido: ${rawChannel}. Use "msedge" ou "chrome".`,
   );
 }
 
@@ -1247,17 +1287,22 @@ function safeChromiumExecutablePath(): string | undefined {
   }
 }
 
-async function findInstalledChromiumBrowser(): Promise<string | undefined> {
-  const candidates = [
-    process.env["PROGRAMFILES"]
-      ? `${process.env["PROGRAMFILES"]}\\Google\\Chrome\\Application\\chrome.exe`
-      : undefined,
-    process.env["PROGRAMFILES(X86)"]
-      ? `${process.env["PROGRAMFILES(X86)"]}\\Google\\Chrome\\Application\\chrome.exe`
-      : undefined,
-    process.env.LOCALAPPDATA
-      ? `${process.env.LOCALAPPDATA}\\Google\\Chrome\\Application\\chrome.exe`
-      : undefined,
+export async function findInstalledBrowserByChannel(
+  channel: CorporateBrowserChannel,
+): Promise<string | undefined> {
+  const candidates = channel === "msedge" ? buildEdgeCandidates() : buildChromeCandidates();
+
+  for (const candidate of candidates) {
+    if (candidate && (await fileExists(candidate))) {
+      return candidate;
+    }
+  }
+
+  return undefined;
+}
+
+function buildEdgeCandidates(): Array<string | undefined> {
+  return [
     process.env["PROGRAMFILES"]
       ? `${process.env["PROGRAMFILES"]}\\Microsoft\\Edge\\Application\\msedge.exe`
       : undefined,
@@ -1268,14 +1313,20 @@ async function findInstalledChromiumBrowser(): Promise<string | undefined> {
       ? `${process.env.LOCALAPPDATA}\\Microsoft\\Edge\\Application\\msedge.exe`
       : undefined,
   ];
+}
 
-  for (const candidate of candidates) {
-    if (candidate && (await fileExists(candidate))) {
-      return candidate;
-    }
-  }
-
-  return undefined;
+function buildChromeCandidates(): Array<string | undefined> {
+  return [
+    process.env["PROGRAMFILES"]
+      ? `${process.env["PROGRAMFILES"]}\\Google\\Chrome\\Application\\chrome.exe`
+      : undefined,
+    process.env["PROGRAMFILES(X86)"]
+      ? `${process.env["PROGRAMFILES(X86)"]}\\Google\\Chrome\\Application\\chrome.exe`
+      : undefined,
+    process.env.LOCALAPPDATA
+      ? `${process.env.LOCALAPPDATA}\\Google\\Chrome\\Application\\chrome.exe`
+      : undefined,
+  ];
 }
 
 async function navigateForHandoff(

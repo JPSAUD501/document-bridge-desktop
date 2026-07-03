@@ -101,6 +101,7 @@ export interface RunPaths {
   runId: string;
   runDir: string;
   downloadsDir: string;
+  browserProfileDir: string;
   authStatePath: string;
   manifestPath: string;
   logPath: string;

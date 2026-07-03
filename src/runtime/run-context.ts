@@ -14,14 +14,17 @@ export async function resolveRunPaths(cliOptions: CliOptions): Promise<RunPaths>
     const workspaceRoot = await findWorkspaceRoot();
     const downloadsDir = path.join(runDir, "downloads");
     const authStatePath = await resolveAuthStatePath(workspaceRoot);
+    const browserProfileDir = await resolveBrowserProfileDir(workspaceRoot);
     await fs.mkdir(downloadsDir, { recursive: true });
     await fs.mkdir(path.dirname(authStatePath), { recursive: true });
+    await fs.mkdir(browserProfileDir, { recursive: true });
 
     return {
       workspaceRoot,
       runId: path.basename(runDir),
       runDir,
       downloadsDir,
+      browserProfileDir,
       authStatePath,
       manifestPath: path.join(runDir, "manifest.json"),
       logPath: path.join(runDir, "run.log"),
@@ -37,14 +40,17 @@ export async function resolveRunPaths(cliOptions: CliOptions): Promise<RunPaths>
   const runDir = path.join(outputRootPath, runId);
   const downloadsDir = path.join(runDir, "downloads");
   const authStatePath = await resolveAuthStatePath(workspaceRoot);
+  const browserProfileDir = await resolveBrowserProfileDir(workspaceRoot);
   await fs.mkdir(downloadsDir, { recursive: true });
   await fs.mkdir(path.dirname(authStatePath), { recursive: true });
+  await fs.mkdir(browserProfileDir, { recursive: true });
 
   return {
     workspaceRoot,
     runId,
     runDir,
     downloadsDir,
+    browserProfileDir,
     authStatePath,
     manifestPath: path.join(runDir, "manifest.json"),
     logPath: path.join(runDir, "run.log"),
@@ -64,4 +70,22 @@ export async function resolveAuthStatePath(workspaceRoot: string): Promise<strin
   }
 
   return preferredPath;
+}
+
+export async function resolveBrowserProfileDir(workspaceRoot: string): Promise<string> {
+  const configuredDir = process.env.ERP_MIDAS_BROWSER_PROFILE_DIR?.trim();
+  if (configuredDir) {
+    return path.resolve(configuredDir);
+  }
+
+  if (isPackagedElectronRuntime()) {
+    const baseDir = process.env.APPDATA ?? path.join(workspaceRoot, "tmp");
+    return path.join(baseDir, "Pegasus", "browser-profile");
+  }
+
+  return path.join(workspaceRoot, "tmp", "erp-midas-desktop", "browser-profile");
+}
+
+function isPackagedElectronRuntime(): boolean {
+  return Boolean(process.versions.electron) && process.env.NODE_ENV !== "development" && !process.env.VITE_DEV_SERVER_URL;
 }

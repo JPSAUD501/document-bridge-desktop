@@ -2,7 +2,7 @@ import { EventEmitter } from "node:events";
 import path from "node:path";
 import type { CliOptions, RuntimeSnapshot } from "../types";
 import { buildCounts, buildManifestItemId, findWorkspaceRoot, sanitizeFileName, summarizeError } from "../lib/utils";
-import { resolveAuthStatePath, resolveRunPaths } from "./run-context";
+import { resolveBrowserProfileDir, resolveRunPaths } from "./run-context";
 import { RunLogger } from "./logger";
 import { ManifestStore } from "./manifest-store";
 import { ExcelStatusWriter } from "./excel-status-writer";
@@ -65,11 +65,11 @@ export class AppController extends EventEmitter {
     try {
       validateAutomationTargets();
       const workspaceRoot = await findWorkspaceRoot();
-      const authStatePath = await resolveAuthStatePath(workspaceRoot);
+      const browserProfileDir = await resolveBrowserProfileDir(workspaceRoot);
 
       this.setSnapshot({ phase: "preflight" });
       this.#browserManager = new BrowserManager({
-        authStatePath,
+        browserProfileDir,
         onStatus: async (message) => {
           await this.#logger?.info("browser", message);
         },
