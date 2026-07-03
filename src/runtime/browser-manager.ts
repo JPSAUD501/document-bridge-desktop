@@ -112,8 +112,7 @@ export class BrowserManager {
     this.#context.setDefaultNavigationTimeout(APP_TIMEOUTS.long);
     this.#context.setDefaultTimeout(APP_TIMEOUTS.long);
 
-    await this.closeExistingContextPages();
-    this.#erpPage = await this.#context.newPage();
+    this.#erpPage = await this.prepareErpPage();
     this.#midasPage = await this.#context.newPage();
     this.#context.on("page", (page) => {
       void this.handleUnexpectedPage(page);
@@ -584,18 +583,23 @@ export class BrowserManager {
     }
   }
 
-  async closeExistingContextPages(): Promise<void> {
+  async prepareErpPage(): Promise<Page> {
     if (!this.#context) {
-      return;
+      throw new Error("O contexto do navegador nao esta disponivel.");
     }
 
     const pages = this.#context.pages();
     if (pages.length === 0) {
-      return;
+      return this.#context.newPage();
     }
 
-    await this.#onStatus?.("Fechando abas restauradas do perfil persistente antes de iniciar ERP e Midas.");
-    await Promise.allSettled(pages.map((page) => page.close()));
+    const [erpPage, ...restoredPages] = pages;
+    if (restoredPages.length > 0) {
+      await this.#onStatus?.("Fechando abas restauradas do perfil persistente antes de iniciar ERP e Midas.");
+      await Promise.allSettled(restoredPages.map((page) => page.close()));
+    }
+
+    return erpPage!;
   }
 
   async persistStorageState(): Promise<void> {
